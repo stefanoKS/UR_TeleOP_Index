@@ -21,8 +21,9 @@ remain invalid, retain the calibration and collect the solver logs for diagnosis
 
 V2 optical signal freshness requires at least one sensor with both planes recently
 accepted from either calibrated station within 250 ms, independently of pose output.
-Commissioning defaults to `two_station_strict` (four pairs on each of two stations);
-`single_station_experimental` requires separate continuous 6-DoF pose validation.
+Commissioning accepts either calibrated station by default (`any_station`), with
+separate fresh continuous 6-DoF pose validation. Legacy station policies are aliases;
+there is no station-count speed reduction.
 Pose headers now preserve solver sample intervals using a fixed ROS/source clock
 anchor; `/vr/controller/source_time` retains the original solver timestamp.
 Repeated/reordered light timestamps do not renew freshness. These are conservative

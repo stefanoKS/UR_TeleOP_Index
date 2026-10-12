@@ -104,12 +104,13 @@ Click **Start Servo solver** in the GUI.
 This starts computation on a staging topic; it does not activate a robot controller.
 The GUI lists readiness blockers rather than silently bypassing them.
 
-1. With both base stations visible to the controller, verify Optical becomes fresh
-   and each of at least two LH entries has >=4 paired sensors. Move/rotate through
-   the intended range while observing the counts.
+1. With either calibrated base station visible, verify Optical becomes fresh with
+   at least one paired sensor. Independently verify a fresh valid 6-DoF pose.
+   Repeat with Lighthouse 0 alone, Lighthouse 1 alone, and both visible.
 2. While the robot remains inactive, obscure the controller's optical sensors
    from both stations. Optical must become LOST even if pose_fresh remains true.
-   Test loss of one station too: this commissioning configuration requires two.
+   With both initially visible, lose one: readiness must remain available if the
+   other station and the pose remain valid. Losing all optical observations must stop motion.
    Do not move base stations during this test. Restore visibility and verify recovery.
 3. Verify all three translation directions and small rotations in preview. The
    reference is model `tool0`, not a custom pendant TCP. The physical setup must
@@ -140,7 +141,7 @@ accepted light observations, **not pose accuracy or a certified safety signal**.
 
 - A released at startup/recovery, explicit enable request, valid named finite joints,
   measured standstill at arm, wall-clock and receipt freshness, input/target jumps.
-- Both calibrated Lighthouse stations, four sensor pairs per station within
+- Either calibrated Lighthouse station, at least one accepted sensor pair within
   250 ms, and 500 ms stable optical recovery before arm is possible.
 - Robot mode RUNNING, safety NORMAL/REDUCED, External Control running, fresh
   speed scaling (the UR topic reports percent), and fresh Servo status without halt.
@@ -317,8 +318,9 @@ the driver or External Control, and never clears robot safety faults.
 
 The optional radius, if explicitly reenabled, is measured around the first healthy
 tool position after launch. The default is OFF; robot reach and model limits still apply. The updated bridge accepts a
-250 ms window of optical pairs and defaults to a 350 ms pose timeout; four paired
-sensors per station and two calibrated stations are still required. Restart the
+250 ms window of optical pairs and defaults to a 350 ms pose timeout; one paired
+observation from either calibrated station establishes signal presence. Fresh valid
+6-DoF pose data remains an independent motion requirement. Restart the
 bridge as well as commissioning/GUI to load these changes. Controller and Servo
 command watchdogs are unchanged.
 

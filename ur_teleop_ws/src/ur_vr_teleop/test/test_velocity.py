@@ -105,7 +105,7 @@ def test_sign_boundary_mapping_and_simultaneous_rotation():
 def test_pose_and_optical_are_independent_requirements():
     assert not optical_ready({}, 'single_station_experimental')
     assert optical_ready({1: 1}, 'single_station_experimental')
-    assert not optical_ready({1: 1}, 'two_station_strict')
+    assert optical_ready({1: 1}, 'two_station_strict')
     assert optical_ready({0: 4, 1: 4}, 'two_station_strict')
     q = PoseQuality()
     assert not q.accept(1, [0]*3, [0]*4)

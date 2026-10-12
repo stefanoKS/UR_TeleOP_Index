@@ -147,12 +147,11 @@ class Commissioning(Preview):
                  'linear_velocity_filter_s', 'angular_velocity_filter_s', 'single_station_motion_scale')}
         validate(extra)
         self.core.control_mode = extra['teleop_control_mode']
-        self.station_policy = extra['tracking_station_policy']
+        self.station_policy = 'any_station'  # Old saved policy names remain accepted aliases.
         self.core.linear_velocity_filter_s = extra['linear_velocity_filter_s']
         self.core.angular_velocity_filter_s = extra['angular_velocity_filter_s']
-        # Keep the reduced envelope for the entire experimental session, avoiding
-        # a speed step or changed deceleration limit when stations appear/disappear.
-        self.motion_scale = extra['single_station_motion_scale'] if self.station_policy == 'single_station_experimental' else 1.
+        # Station visibility never changes independently configured motion limits.
+        self.motion_scale = 1.
         linear = self.get_parameter('max_linear_speed_m_s').value
         angular = self.get_parameter('max_angular_speed_deg_s').value
         joint = self.get_parameter('max_joint_speed_rad_s').value
@@ -186,9 +185,7 @@ class Commissioning(Preview):
             raise ValueError('joint_acceleration_warning_rad_s2 must be finite positive')
         if len(mapping) != 3 or not all(math.isfinite(x) for x in mapping):
             raise ValueError('Alignment requires three finite RPY degrees')
-        self.core.max_speed, self.core.max_angular_speed = linear*self.motion_scale, math.radians(angular)*self.motion_scale
-        self.core.linear_acceleration *= self.motion_scale
-        self.core.angular_acceleration *= self.motion_scale
+        self.core.max_speed, self.core.max_angular_speed = linear, math.radians(angular)
         self.core.axis_rotation = Rotation.from_euler('xyz', mapping, degrees=True)
         self.core.rotation = self.core.axis_rotation.as_matrix()
 
@@ -390,9 +387,9 @@ class Commissioning(Preview):
         if self.workspace_radius > 0 and self.core.home is not None and hasattr(self, 'measured_tcp') and np.linalg.norm(self.measured_tcp-self.core.home) > self.core.radius + .001:
             problems.append(f'Measured tool outside {self.core.radius*100:g} cm workspace radius')
         if not self.optical or not self.policy_optical_ready() or t-self.optical_at >= .20 or t-self.optical_since < .5:
-            problems.append('Need stable optical observations for ' + self.station_policy + '; signal presence alone does not validate a 6-DoF pose')
-        if self.station_policy == 'single_station_experimental' and not self.pose_quality.continuous:
-            problems.append('Experimental tracking needs at least 100 ms of continuous independent 6-DoF poses')
+            problems.append('Need stable optical observations from either calibrated station; signal presence alone does not validate a 6-DoF pose')
+        if not self.pose_quality.continuous:
+            problems.append('Tracking needs at least 100 ms of continuous independent 6-DoF poses')
         if t-self.servo_at >= .25: problems.append('Servo status stale (no update for 250 ms)')
         elif self.servo_status not in (0, 1, 3, 6): problems.append(servo_status_detail(self.servo_status))
         if self.robot_mode != 7:
@@ -544,7 +541,7 @@ class Commissioning(Preview):
             'session_id': self.session_id,
             'teleop_control_mode': self.core.control_mode,
             'tracking_station_policy': self.station_policy,
-            'single_station_motion_scale': self.get_parameter('single_station_motion_scale').value,
+            'single_station_motion_scale': 1.,
             'linear_velocity_filter_s': self.core.linear_velocity_filter_s,
             'angular_velocity_filter_s': self.core.angular_velocity_filter_s,
             'optical_stations': self.optical_stations if time.monotonic()-self.optical_detail_at < .20 else {k: 0 for k in self.optical_stations},

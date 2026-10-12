@@ -20,9 +20,9 @@ try:
         'optical': False, 'servo': 0, 'accepted_targets': 0,
         'reason': 'Disarmed at startup',
         'session_id': 'gui-render-test',
-        'teleop_control_mode': 'velocity', 'tracking_station_policy': 'single_station_experimental',
+        'teleop_control_mode': 'velocity', 'tracking_station_policy': 'any_station',
         'linear_velocity_filter_s': .04, 'angular_velocity_filter_s': .06,
-        'single_station_motion_scale': .25, 'optical_stations': {'0': 0, '1': 1},
+        'single_station_motion_scale': 1., 'optical_stations': {'0': 0, '1': 1},
         'active_station_count': 1, 'pose_fresh': True, 'motion_ready': False,
         'tracking_rejection': 'none',
         'workspace_radius_m': 0., 'observation_timeout_s': .35, 'linear': .1, 'angular': 30., 'joint_speed': .5, 'tracking_gain': 2.,
@@ -33,8 +33,8 @@ try:
         'motion_metrics_current': False,
         'motion_metrics': {'hand_m': .1, 'target_m': .1, 'tool_m': .098, 'error_m': .002,
                            'hand_deg': 10., 'target_deg': 10., 'tool_deg': 9.8},
-        'optical_detail': 'Gen2 accepted paired sensors (250 ms): LH0=12 LH1=0; require >=4 on each of >=2 stations; optical_fresh=false',
-        'blockers': ['Need stable optical observations from two stations',
+        'optical_detail': 'Gen2 accepted paired sensors (250 ms): LH0=12 LH1=0; signal from either station; optical_fresh=true',
+        'blockers': ['Need a fresh valid 6-DoF pose',
                      'Perform optical-loss test and confirm in GUI'],
     })))
     gui.poll()
@@ -55,7 +55,7 @@ try:
     assert '1 rad/s²' in gui.applied_limits.get() and '10 rad/s³' in gui.applied_limits.get()
     assert 'hand 10.0 / target 10.0 / tool 9.8 cm' in gui.motion.get()
     assert gui.fields[17].get() == 'velocity'
-    assert gui.fields[18].get() == 'single_station_experimental'
+    assert gui.fields[18].get() == 'any_station'
     assert gui.fields[20].get() == '0.06'
     assert 'Lighthouse 1: detected (1 paired sensors)' in gui.detail.get()
     assert gui.enabled.get()

@@ -3,12 +3,10 @@ import numpy as np
 from ur_vr_sim_teleop.core import orientation
 
 
-def optical_ready(counts, policy):
-    if policy == 'two_station_strict':
-        return sum(v >= 4 for v in counts.values()) >= 2
-    if policy == 'single_station_experimental':
-        return any(v >= 1 for v in counts.values())
-    return False
+def optical_ready(counts, policy='any_station'):
+    # Legacy saved policies are aliases, never two-station gates.
+    return (policy in ('any_station', 'two_station_strict', 'single_station_experimental')
+            and any(v >= 1 for v in counts.values()))
 
 
 class PoseQuality:

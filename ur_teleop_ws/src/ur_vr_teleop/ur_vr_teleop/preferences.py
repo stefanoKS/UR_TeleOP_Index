@@ -19,9 +19,9 @@ DEFAULTS = {
     'translation_damping_gain': 0., 'rotation_damping_gain': 0.,
     'damping_velocity_filter_s': .05,
     'teleop_control_mode': 'velocity',
-    'tracking_station_policy': 'two_station_strict',
+    'tracking_station_policy': 'any_station',
     'linear_velocity_filter_s': .04, 'angular_velocity_filter_s': .04,
-    'single_station_motion_scale': .25,
+    'single_station_motion_scale': 1.  # Legacy saved field; ignored by the motion gate,
 }
 FIELD_PARAMETERS = list(DEFAULTS)
 
@@ -31,7 +31,7 @@ def validate(values):
         raise ValueError('Saved settings contain unsupported fields')
     for key, value in values.items():
         choices = {'teleop_control_mode': ('position', 'velocity'),
-                   'tracking_station_policy': ('two_station_strict', 'single_station_experimental')}
+                   'tracking_station_policy': ('any_station', 'two_station_strict', 'single_station_experimental')}
         if key in choices:
             if value not in choices[key]:
                 raise ValueError(key + ' must be one of ' + str(choices[key]))

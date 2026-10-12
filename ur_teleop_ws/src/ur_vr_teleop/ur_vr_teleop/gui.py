@@ -111,14 +111,18 @@ class OperatorGUI:
                                           ('Rotation damping (0–1; 0 = off)', '0.0'),
                                           ('Damping velocity filter (ms)', '50'),
                                           ('Control mode (position / velocity)', 'velocity'),
-                                          ('Station policy', 'two_station_strict'),
+                                          ('Station policy (legacy)', 'any_station'),
                                           ('Linear velocity filter (seconds; 0 = off)', '0.04'),
                                           ('Angular velocity filter (seconds; 0 = off)', '0.04'),
-                                          ('Experimental motion fraction (0.01–1)', '0.25')]):
+                                          ('Station motion fraction (legacy; ignored)', '1.0')]):
+            if i in (18, 21):
+                # Keep saved-field indices compatible; no station mode or scale UI.
+                self.fields[i] = tk.StringVar(value=value)
+                continue
             ttk.Label(controls, text=label).grid(row=i, column=0, sticky='w', pady=4)
             v = tk.StringVar(value=value)
-            if i in (17, 18):
-                choices = ('position', 'velocity') if i == 17 else ('two_station_strict', 'single_station_experimental')
+            if i == 17:
+                choices = ('position', 'velocity')
                 ttk.Combobox(controls, textvariable=v, values=choices, state='readonly', width=30).grid(row=i, column=1, padx=16, pady=4)
             else:
                 ttk.Entry(controls, textvariable=v, width=26).grid(row=i, column=1, padx=16, pady=4)

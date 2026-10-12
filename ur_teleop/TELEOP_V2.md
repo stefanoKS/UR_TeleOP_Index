@@ -46,15 +46,16 @@ IMU updates never refresh optical observations. All observed station counts rema
 in `/vr/controller/optical_status` as `LHn=count`; commissioning also checks that
 this diagnostic source is unique and fresh. No new custom message is required.
 
-- `two_station_strict` (default): at least four accepted pairs on each of two
-  stations, with the existing 500 ms optical stability requirement.
-- `single_station_experimental`: at least one accepted pair on either station,
-  plus an independently accepted stream of at least three 6-DoF poses spanning
-  100 ms and the same optical stability requirement. Both linear/angular speeds
-  and accelerations are reduced by `single_station_motion_scale` for the entire
-  experimental session, even when two stations become visible.
+The normal `any_station` policy accepts one fresh paired observation from either
+calibrated station, with 500 ms optical stability and an independently accepted
+6-DoF stream of at least three poses spanning 100 ms. Both stations may contribute,
+but neither station is individually mandatory. Losing one while the other and the
+pose remain valid does not disarm. The old `two_station_strict` and
+`single_station_experimental` names are accepted only as compatibility aliases.
+`single_station_motion_scale` is ignored, including saved values of 0.25.
+Configured robot speed and acceleration limits apply unchanged.
 
-Both policies retain all robot, TF, joint, controller, operator, Servo, watchdog,
+The gate retains all robot, TF, joint, controller, operator, Servo, watchdog,
 and calibration-confirmation checks. Pose validation checks finite coordinates,
 normalized valid quaternions, monotonic timestamps, source/receipt freshness,
 translation jumps over 5 cm, rotation jumps over 45 degrees, and gaps over 350 ms.
@@ -64,7 +65,7 @@ noisy stationary measurements are allowed. Recovery requires releasing A.
 
 These checks establish continuity and plausibility, **not metric pose accuracy or
 full optical observability**. A plausible but drifting solver output can escape
-these checks. Single-station tracking remains explicitly experimental. If the
+these checks. One-station operation is the normal default. If the
 workcell trial cannot establish reliable 6-DoF tracking, leave teleop disabled;
 an optical-presence indicator or GUI confirmation is not proof of accuracy.
 
@@ -87,7 +88,7 @@ to persist. The startup log records effective values and their sources.
 | Parameter | Initial value | Meaning |
 |---|---:|---|
 | `teleop_control_mode` | `velocity` | `position` restores the regression controller |
-| `tracking_station_policy` | `two_station_strict` | Explicitly select `single_station_experimental` for a one-station trial |
+| `tracking_station_policy` | `any_station` | Either or both calibrated stations; old names are aliases |
 | `translation_scale` | 0.8333333333 | Hand speed to TCP speed ratio; GUI uses inverse VR:robot ratio 1.2 |
 | `rotation_scale` | 1.0 | Hand angular speed to TCP angular speed ratio |
 | `vr_translation_filter_alpha` | 0.8 | Input position EMA; 1 disables |
@@ -96,11 +97,11 @@ to persist. The startup log records effective values and their sources.
 | `vr_rotation_deadband_deg` | 0.3 | Continuous angular jitter band |
 | `linear_velocity_filter_s` | 0.04 | Time-based EMA; 0 disables, maximum 0.2 s |
 | `angular_velocity_filter_s` | 0.04 | Time-based EMA; 0 disables, maximum 0.2 s |
-| `max_linear_speed_m_s` | 0.10 | Before experimental multiplier |
-| `max_angular_speed_deg_s` | 30.0 | Before experimental multiplier |
-| `max_linear_acceleration_m_s2` | 0.25 | Before experimental multiplier |
-| `max_angular_acceleration_rad_s2` | 1.5707963268 | Before experimental multiplier |
-| `single_station_motion_scale` | 0.25 | Allowed 0.01–1; initial effective limits 0.025 m/s, 7.5 deg/s, 0.0625 m/s², 0.3927 rad/s² |
+| `max_linear_speed_m_s` | 0.10 | Independently configured limit |
+| `max_angular_speed_deg_s` | 30.0 | Independently configured limit |
+| `max_linear_acceleration_m_s2` | 0.25 | Independently configured limit |
+| `max_angular_acceleration_rad_s2` | 1.5707963268 | Independently configured limit |
+| `single_station_motion_scale` | 1.0 | Deprecated compatibility field; ignored, no automatic station-count scaling |
 | `tracking_gain_s_inv` | 2.0 | Position mode only |
 | `translation_damping_gain`, `rotation_damping_gain` | 0.0 | Position mode only |
 | `damping_velocity_filter_s` | 0.05 | Existing measured-velocity filter |
@@ -109,7 +110,7 @@ to persist. The startup log records effective values and their sources.
 | `observation_timeout_s` | 0.35 | Existing general observation freshness bound |
 
 These are software starting values, not validated safe settings for every payload
-or workcell. For initial authorized trials, use the experimental reduced envelope
+or workcell. For initial authorized trials, choose suitable independent speed/acceleration limits
 and a suitably reduced pendant speed. Keep final joint acceleration 1 rad/s²,
 jerk 10 rad/s³, `servoj_gain=500` and `servoj_lookahead_time=0.03` unchanged when
 comparing modes. Use the already calibrated mapping; do not recalibrate by hand.
@@ -193,22 +194,20 @@ Do not combine unrelated sessions into one bag comparison.
 Use the established safeguarded workcell procedure, a trained operator at the
 pendant and an observer able to stop the robot. Verify payload/tool and clearance.
 First run Preview with robot motion controllers inactive. Check all three
-translation and rotation directions and the actual `tool0` frame. With experimental
-policy selected, test station 0 alone and station 1 alone. Verify the correct paired
+translation and rotation directions and the actual `tool0` frame. Test station 0 alone and station 1 alone using the normal default policy. Verify the correct paired
 sensor counts and independent pose freshness; signal presence without a valid pose
 must leave motion readiness false.
 
 Cover the only visible station: optical signal must expire within its 250 ms bound,
 tracking readiness must drop and the gate must disarm. Restore visibility while A
 remains held: it must remain disarmed. Release A, wait for stable readiness, then
-press again; the first request must be zero without catch-up. Repeat by blocking
-both stations under strict policy. Also test stale pose output and the GUI heartbeat
+press again; the first request must be zero without catch-up. Repeat by blocking both stations. Also test stale pose output and the GUI heartbeat
 loss in dry run. Only then confirm mapping and optical-loss verification.
 
 For an explicitly authorized live trial, use the existing **Live setup** workflow,
 start the pendant External Control program, prepare the controller and start Servo
-through the existing controls. Inspect every readiness blocker. Keep the reduced
-Cartesian envelope and low pendant speed, enable teleop with A released, and start
+through the existing controls. Inspect every readiness blocker. Keep deliberately configured low
+Cartesian limits and low pendant speed, enable teleop with A released, and start
 with tiny isolated translation/rotation movements. Release A frequently and verify
 measured stopping. Record the sequence above. Stop on drift, oscillation, unexpected
 mapping, jumps or unreliable tracking. A GUI disarm is a software stop; use the
@@ -217,10 +216,10 @@ this tool or bypass readiness checks to complete a trial.
 
 ## Rollback
 
-Disable teleop, release A, choose `position`, choose `two_station_strict`, then
-Apply and save. This restores position-following control and strict optical motion
+Disable teleop, release A, choose `position`, then
+Apply and save. This restores position-following control while retaining normal either-station optical motion
 readiness without changing calibration, driver or Ruckig settings. The new optical
-Bool continues to mean signal presence; strict authorization is in commissioning.
+Bool continues to mean signal presence; pose and robot-state authorization remain in commissioning.
 To restore the entire old implementation, first stop the owned ROS stack, preserve
 operator settings, revert this change set using version control, rebuild the four
 packages and relaunch disarmed. Do not mix an old gate with the new bridge's relaxed
@@ -280,3 +279,75 @@ Final verified results:
   position mode for position-target assertions; no old test cases were removed.
 - One existing xacro/Python deprecation warning remains. Real hardware and real
   recorded tracking were not tested; the bag fixture and plant are synthetic.
+
+## Either-station default update — 2026-10-12
+
+This follow-up removes all two-station/four-pairs-per-station motion prerequisites.
+Both old policy names are compatibility aliases; neither can restore the old gate.
+The obsolete policy selector and station-speed multiplier are hidden in the GUI.
+Old saved policy/scale fields remain loadable, but effective status reports
+`any_station` and scale 1.0. Launch already forwards the complete settings dictionary;
+no launch change was needed. The bridge callback already accepts one calibrated
+paired observation and needed no change. Independent pose checks, including the
+existing 100 ms continuity criterion, now apply uniformly to any station count.
+
+### Installed libsurvive initialization audit (read-only)
+
+Inspected `/home/ubuntu-ros/.config/libsurvive/config.json` and the local checkout
+under `ur_teleop/tools/libsurvive/src/`:
+
+- The installed configuration selects `MPFIT`, Gen2, and contains `OOTXSet=1` and
+  `PositionSet=1` for both saved Lighthouse entries. There is no configured forced
+  recalibration or `lighthousecount` override. Saved calibration entries are not
+  a requirement that those stations are simultaneously visible.
+- `survive.c` loads both saved transforms/channel mappings without waiting for
+  simultaneous optical observations. Keep both entries to preserve the world frame
+  and permit either station to return; do not truncate the calibration to station 0.
+- `poser_mpfit.c::setup_optimizer` establishes the world if **any** saved station
+  has `PositionSet`. Its `invalid_starting_condition` sums observations from known
+  stations and requires eight measurements and both sweep axes, not two stations.
+- `poser_general_optimizer.c` selects `BaryCentricSVD` as the default seed solver.
+  `poser_barycentric_svd.c` solves each calibrated station independently and chooses
+  the available solution with the most measurements; one valid solution suffices.
+  Its default measurement minimum is eight, not a station-count requirement.
+- Neither the bridge's libsurvive argument list nor the managed desktop launch
+  imposes a Lighthouse count. Calibration, solver thresholds and alignment were
+  left unchanged. Lowering solver measurement requirements to one pair would
+  conflate optical presence with a valid 6-DoF solution and was deliberately avoided.
+
+The inspected initialization path supports either physical station alone, provided
+it supplies sufficient geometry for a valid pose. Actual cold-start tracking with
+each physical Lighthouse was **not hardware-tested**; no tracking hardware or robot
+motion was activated by this task.
+
+### Exact modified files for this follow-up
+
+Paths are relative to the repository root:
+
+- `ur_teleop/config/real_teleop.yaml`
+- `ur_teleop/TELEOP_V2.md`
+- `ur_teleop_ws/src/ur_vr_bridge/include/ur_vr_bridge/optical_guard.hpp`
+- `ur_teleop_ws/src/ur_vr_bridge/test/test_optical_guard.cpp`
+- `ur_teleop_ws/src/ur_vr_bridge/README.md`
+- `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/tracking_quality.py`
+- `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/commissioning.py`
+- `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/preferences.py`
+- `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gui.py`
+- `ur_teleop_ws/src/ur_vr_teleop/test/test_velocity.py`
+- `ur_teleop_ws/src/ur_vr_teleop/test/ros_integration_checks.py`
+- `ur_teleop_ws/src/ur_vr_teleop/test/gui_render_check.py`
+- `ur_teleop_ws/src/ur_vr_teleop/README.md`
+
+### Follow-up validation
+
+- Python unit/regression suites: **164 passed**; one existing xacro deprecation warning.
+- Isolated ROS integration checks: **78 passed**. Covers LH0 alone, LH1 alone,
+  both, loss of either with valid remaining pose (no disarm), loss of both (stop),
+  optical-only/no valid pose (blocked), held-A recovery (no re-engagement), and
+  legacy policy/0.25 settings retaining independent speed/acceleration limits.
+- Bridge CTest: **2/2 passed**, including one pair on either station, expiration,
+  duplicates, strict-alias compatibility and loss of one with the other remaining.
+- GUI render/effective-settings check: **passed**.
+- `colcon build --packages-select ur_vr_bridge ur_vr_teleop --symlink-install`:
+  **both packages succeeded**.
+- `git diff --check`: passed. No outstanding test or build failures.

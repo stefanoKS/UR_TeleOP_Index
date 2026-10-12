@@ -35,11 +35,8 @@ class OpticalGuard {
     }
     return result;
   }
-  bool strict(double now) const {
-    int stations = 0;
-    for (const auto& entry : counts(now)) if (entry.second >= 4) ++stations;
-    return stations >= 2;
-  }
+  // Compatibility alias: station count is never a motion prerequisite.
+  bool strict(double now) const { return fresh(now); }
   bool fresh(double now) const {
     int stations = 0;
     for (const auto& entry : counts(now)) if (entry.second >= 1) ++stations;

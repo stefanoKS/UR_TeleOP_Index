@@ -46,6 +46,12 @@ def healthy(n):
     pose = PoseStamped()
     pose.header.stamp, pose.header.frame_id = now, 'lighthouse'
     pose.pose.orientation.w = 1.
+    if n.pose_quality.stamp is None:
+        stamp = n.get_clock().now().nanoseconds
+        for i in range(12):
+            pose.header.stamp = rclpy.time.Time(nanoseconds=stamp-(12-i)*10_000_000).to_msg()
+            n.on_pose(pose)
+        pose.header.stamp = now
     n.on_pose(pose)
     joints = JointState()
     joints.header.stamp = now
@@ -656,10 +662,9 @@ def test_velocity_mode_switch_requires_disarm_release_and_resets_history(node):
     assert node.core.control_mode == 'position'
 
 
-def experimental_ready(node):
-    assert node.set_parameters_atomically([Parameter('tracking_station_policy', value='single_station_experimental')]).successful
+def single_station_ready(node, counts="LH0=0 LH1=1"):
     healthy(node)
-    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): LH0=0 LH1=1'))
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): '+counts))
     node.optical_since = time.monotonic()-1.
     # Independent solver stream, not an optical-only readiness override.
     from ur_vr_teleop.tracking_quality import PoseQuality
@@ -675,17 +680,18 @@ def experimental_ready(node):
     node.tick()
 
 
-def test_single_station_signal_plus_continuous_pose_qualifies_experimental_gate(node):
-    experimental_ready(node)
+@pytest.mark.parametrize('counts', ['LH0=1 LH1=0', 'LH0=0 LH1=1', 'LH0=1 LH1=1'])
+def test_either_station_signal_plus_valid_pose_qualifies_default_gate(node, counts):
+    single_station_ready(node, counts)
     assert node.arm(Trigger.Request(), Trigger.Response()).success
-    assert node.core.max_speed == pytest.approx(.025)
-    assert node.core.linear_acceleration == pytest.approx(.0625)
-    assert node.core.max_angular_speed == pytest.approx(3.141592653589793/24)
+    assert node.core.max_speed == pytest.approx(.1)
+    assert node.core.linear_acceleration == pytest.approx(.25)
+    assert node.core.max_angular_speed == pytest.approx(3.141592653589793/6)
     assert node.command_pub is None
 
 
 def test_single_optical_observation_without_pose_cannot_arm(node):
-    experimental_ready(node)
+    single_station_ready(node)
     node.pose_ok = False
     node.tick()
     assert not node.arm(Trigger.Request(), Trigger.Response()).success
@@ -693,7 +699,7 @@ def test_single_optical_observation_without_pose_cannot_arm(node):
 
 
 def test_single_station_loss_reacquisition_and_jump_require_fresh_clutch(node):
-    experimental_ready(node)
+    single_station_ready(node)
     node.enable_requested = True
     assert node.arm(Trigger.Request(), Trigger.Response()).success
     node.pressed = True
@@ -720,7 +726,7 @@ def test_effective_new_settings_in_status(node):
     node.tick()
     data = json.loads(node.operator_status.publish.call_args.args[0].data)
     assert data['teleop_control_mode'] == 'velocity'
-    assert data['tracking_station_policy'] == 'two_station_strict'
+    assert data['tracking_station_policy'] == 'any_station'
     assert data['active_station_count'] == 2
     assert data['optical_stations'] == {'0': 4, '1': 4}
     assert data['linear_velocity_filter_s'] == .04
@@ -772,3 +778,45 @@ def test_invalid_tool_tf_faults_without_crashing_diagnostics(node, field):
     assert not node.observation_healthy
     assert not node.gate.armed
     assert node.measured_tcp_velocity is None
+
+
+@pytest.mark.parametrize('remaining', ['LH0=1 LH1=0', 'LH0=0 LH1=1'])
+def test_one_station_disappears_without_disarming_valid_tracking(node, remaining):
+    single_station_ready(node, 'LH0=1 LH1=1')
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()  # Observe release after arming.
+    node.pressed = True
+    node.tick()
+    assert node.core.state == 'ACTIVE'
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): '+remaining))
+    node.tick()
+    assert node.gate.armed and node.core.state == 'ACTIVE'
+    assert node.policy_optical_ready()
+    assert node.core.max_speed == pytest.approx(.1)
+    node.on_optical(Bool(data=False))
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): LH0=0 LH1=0'))
+    node.tick()
+    assert not node.gate.armed and not node.core.velocity.any()
+    node.on_optical(Bool(data=True))
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): '+remaining))
+    node.optical_since = time.monotonic()-1.
+    node.enable_requested = True
+    node.tick()
+    assert not node.gate.armed  # A still held after loss and recovery.
+
+
+@pytest.mark.parametrize('legacy', ['two_station_strict', 'single_station_experimental'])
+def test_legacy_policy_and_quarter_scale_do_not_restrict_single_station(node, legacy):
+    assert node.set_parameters_atomically([
+        Parameter('tracking_station_policy', value=legacy),
+        Parameter('single_station_motion_scale', value=.25),
+        Parameter('max_linear_speed_m_s', value=.07),
+        Parameter('max_linear_acceleration_m_s2', value=.12),
+    ]).successful
+    single_station_ready(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    assert node.station_policy == 'any_station'
+    assert node.motion_scale == 1.
+    assert node.core.max_speed == pytest.approx(.07)
+    assert node.core.linear_acceleration == pytest.approx(.12)
+    assert node.core.angular_acceleration == pytest.approx(3.141592653589793/2)
