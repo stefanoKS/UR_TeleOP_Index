@@ -28,6 +28,7 @@ from .validation import JOINTS, fresh
 from .gate import Gate
 from .tracking import CONTROL_PERIOD_S, DEFAULT_RESPONSE_GAIN
 from .joint_diagnostics import JointDiagnostics
+from .preferences import DEFAULTS
 
 
 COMMAND = '/scaled_joint_trajectory_controller/joint_trajectory'
@@ -539,6 +540,16 @@ class Commissioning(Preview):
         self.operator_status.publish(String(data=json.dumps({
             'mode': 'LIVE OUTPUT' if self.motion_output else 'DRY RUN — ROBOT OUTPUT DISABLED',
             'session_id': self.session_id,
+            # One complete readback after configure(), in persisted/ROS units.
+            'effective_parameters': {key: (list(self.get_parameter(key).value)
+                if key == 'tracking_to_robot_rpy_deg' else self.get_parameter(key).value)
+                for key in DEFAULTS},
+            'alignment_verified': bool(self.get_parameter('alignment_verified').value and
+                self.verified_mapping == tuple(self.get_parameter('tracking_to_robot_rpy_deg').value)),
+            'optical_loss_test_verified': bool(self.get_parameter('optical_loss_test_verified').value),
+            'operator_heartbeat_fresh': time.monotonic()-self.operator_at < .5,
+            'controller_state_fresh': time.monotonic()-self.controller_at < .6,
+            'servo_status_fresh': time.monotonic()-self.servo_at < .25,
             'teleop_control_mode': self.core.control_mode,
             'tracking_station_policy': self.station_policy,
             'single_station_motion_scale': 1.,

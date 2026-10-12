@@ -820,3 +820,30 @@ def test_legacy_policy_and_quarter_scale_do_not_restrict_single_station(node, le
     assert node.core.max_speed == pytest.approx(.07)
     assert node.core.linear_acceleration == pytest.approx(.12)
     assert node.core.angular_acceleration == pytest.approx(3.141592653589793/2)
+
+
+def test_dashboard_readback_and_confirmations_match_actual_backend(node):
+    from ur_vr_teleop.preferences import DEFAULTS
+    node.operator_status = Mock()
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert set(payload['effective_parameters']) == set(DEFAULTS)
+    assert not payload['alignment_verified']
+    assert not payload['optical_loss_test_verified']
+    healthy(node)
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['alignment_verified'] and payload['optical_loss_test_verified']
+    assert payload['operator_heartbeat_fresh']
+    assert payload['controller_state_fresh'] and payload['servo_status_fresh']
+    node.controller_at = node.servo_at = -float('inf')
+    node.tick()
+    stale_payload=json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert not stale_payload['controller_state_fresh'] and not stale_payload['servo_status_fresh']
+    assert payload['pose_fresh'] and payload['optical_stations'] == {'0': 4, '1': 4}
+    node.set_parameters_atomically([Parameter('tracking_to_robot_rpy_deg', value=[0., 0., -40.])])
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['effective_parameters']['tracking_to_robot_rpy_deg'] == [0., 0., -40.]
+    assert not payload['alignment_verified']  # Parameter bool alone would still be true.
+    assert node.get_parameter('alignment_verified').value
+    assert node.command_pub is None

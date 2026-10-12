@@ -28,12 +28,15 @@ class ToyManager(ProcessManager):
         return [sys.executable, '-c', 'import time; time.sleep(60)']
 
 
-def test_rviz_can_close_and_reopen_without_stopping_stack(tmp_path):
+@pytest.mark.parametrize('optional', ['rviz', 'camera'])
+def test_rviz_can_close_and_reopen_without_stopping_stack(tmp_path, optional):
     manager = ToyManager(tmp_path/'unused', root=tmp_path, conflict_check=lambda: [])
     try:
         manager.start()
         manager.open_rviz()
-        old = manager.children['rviz']
+        if optional == 'camera':
+            manager.spawn('camera', [sys.executable, '-c', 'import time; time.sleep(60)'])
+        old = manager.children[optional]
         old.terminate()
         old.wait(timeout=3)
         manager.poll()

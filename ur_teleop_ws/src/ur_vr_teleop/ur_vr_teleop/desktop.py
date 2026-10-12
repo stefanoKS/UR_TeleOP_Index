@@ -373,7 +373,11 @@ def main(args=None):
         if gui:
             gui.close()
     finally:
-        manager.close()
+        if gui and gui.process_worker:
+            gui.process_worker.close()
+            gui.process_worker.join()
+        else:
+            manager.close()
         if gui:
             gui.node.destroy_node()
         rclpy.shutdown()

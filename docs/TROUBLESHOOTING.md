@@ -68,3 +68,30 @@ See [Configuration](CONFIGURATION.md) for validation ranges and restart requirem
 | FIFO scheduling warning | Session lacks real-time priority permission | `~/Documents/Teleop/ur_teleop/scripts/setup_realtime_permissions.sh --check` | Review helper installation and full logout/login; it does not change the kernel. |
 
 The desktop uses ownership metadata and process groups to stop its own children. Avoid broad `pkill` cleanup or deleting arbitrary build/state directories. A failed driver/tracking/teleop child stops the managed stack; camera/RViz are optional. Preserve logs before restarting a failed session.
+
+## Dashboard synchronization
+
+- **Unable to verify running values:** inspect `effective_parameters` in
+  `/vr_real/operator_status`. It must contain every saved tuning key. Rebuild and
+  source the updated `ur_vr_teleop` package in both backend and GUI processes;
+  an older backend's partial aliases are deliberately not assumed complete.
+- **Applied — awaiting readback:** service acceptance arrived, but a complete
+  matching snapshot or session confirmation has not. Check fresh status and
+  backend/session identity. After timeout, review/revert fresh values before
+  retrying; a timeout does not undo an accepted request.
+- **External parameter changes:** the draft was preserved. Revert to confirmed
+  current values, then re-enter intended edits; do not blindly resubmit.
+- **Applied to current session, but saving failed:** inspect the full action
+  history for the filesystem error. Current runtime values are retained; repair
+  the preference-directory problem and explicitly Apply + Save again.
+- **Pending application / Not verified:** local checkboxes are not backend
+  approval. Read `alignment_verified` and `optical_loss_test_verified`. A changed
+  mapping can invalidate the effective flag even if the raw ROS boolean remains
+  true. Repeat the manual commissioning procedure before checking/applying.
+- **Restart required:** compare active final limit with the separate saved value;
+  perform the explicit supervised restart workflow and verify both readbacks.
+
+Missing velocity feedback is displayed as Unavailable, not zero. Measured TCP
+velocity is a TF-derived estimate. Clutch metrics stop being current on release
+or status loss. See the [field contract](OPERATOR_STATUS.md) for each source and
+its unknown-state behavior.

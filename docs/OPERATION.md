@@ -93,3 +93,42 @@ Losing one station should not stop a valid remaining pose. If it does, inspect p
 Release A, disarm, and wait for measured motion to stop. Use **Stop ROS**, then close the desktop. Follow the pendant procedure for ending External Control. The desktop stops only processes it owns; unrelated ROS processes are not automatically killed.
 
 Session material is under `ur_teleop/logs/`: component logs, `commands.json`, `effective_config.yaml`, and `effective_settings.log`. These record startup settings; accepted runtime changes may be newer. Capture current panel/status and ROS parameter values when diagnosing a session. Logs and recordings are ignored by Git.
+
+## Dashboard edits and confirmations (V3.1)
+
+The parameter-state line distinguishes **No pending edits**, **Unsaved parameter
+changes**, invalid text, applying, waiting for confirmation, restart required,
+and unverified running values. Initial defaults are not assumed to be running.
+Apply waits for a fresh complete backend snapshot, disarmed state and released A.
+Rejected drafts remain editable, with the backend's rejection reason visible.
+
+**Apply** changes the current session. **Apply + Save** also atomically saves the
+submitted tuning after backend acceptance. A successful service response shows
+**Applied — awaiting readback** until matching running values arrive. If saving
+fails, **Applied to current session, but saving failed** does not imply rollback.
+A five-second readback timeout releases the pending form lock and keeps the
+outcome warning visible. Review fresh values before retrying.
+
+The active native joint limit and saved restart-pending limit appear separately.
+Restart ROS remains an explicit operator action; the pending label clears only
+when backend and final-controller readback match the saved value. Revert restores
+confirmed runtime values, retains the separate saved restart setting, and does
+not submit changes or alter session checkboxes. Restore Defaults only stages
+editable defaults; hidden compatibility settings remain intact. A mapping edit
+clears the local alignment checkbox so an old check cannot approve a new mapping.
+
+Checkboxes express draft intent. The checklist uses backend confirmation;
+checking a box alone shows **Pending application**, not **Verified**. Backend
+mapping invalidation revokes verification. Restart clears local session checks;
+stale status shows **Unknown / status unavailable**.
+
+External changes to a field being edited preserve the draft and show a conflict.
+Use Revert to accept current values, then re-enter intended edits. This avoids
+silently overwriting another operator's observed changes.
+
+Only the advanced pane scrolls. The pointer wheel and keyboard focus scroll that
+pane without moving operation controls or quick tuning. Position-only fields
+hide in Velocity mode while preserving their text. Action notifications are
+separate from live readiness: successes remain for five seconds; errors remain
+until dismissed or corrected. **Action history** shows the last 40 actions and
+all current blockers. Long process messages are available there in full.

@@ -136,3 +136,5 @@ The active ROS workspace is `ur_teleop_ws`; the old duplicate runtime build was 
 - [AI agent engineering rules](AGENTS.md)
 
 Historical design/session records are retained: [V2 notes](ur_teleop/TELEOP_V2.md), [teleop update](ur_teleop/TELEOP_UPDATE_20260924.md), [damping](ur_teleop/DAMPING_UPDATE_20260924.md), [state and camera](ur_teleop/DIRECT_STATE_AND_D405_20260924.md), [joint smoothing](ur_teleop/FINAL_COMMAND_SMOOTHING.md), [motion review](ur_teleop/SMOOTH_MOTION_REVIEW.md), and [old project status](ur_calibration_fix_ws/PROJECT_STATUS.md). They describe earlier states and may contain obsolete paths, two-station requirements, or limits. Current source and the guides above take precedence.
+
+Dashboard status fields and parameter synchronization are documented in the [operator-status contract](docs/OPERATOR_STATUS.md).

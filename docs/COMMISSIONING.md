@@ -190,3 +190,23 @@ The checkout and remote HEAD both resolved to `c7373d97012ede52c1bcf1e2804103110
 | Git whitespace/scope check | Passed; only the eight requested Markdown deliverables changed |
 
 The fresh-system apt recipe, calibration-overlay rebuild, separate Servo/mock-startup scripts, display-dependent GUI check, interactive simulation, and all physical tracking/robot procedures were not executed in this documentation update. The main build reused the installed system and existing dependencies; it is not a clean-machine reproduction.
+
+### V3.1 dashboard validation
+
+After building/source-refreshing `ur_vr_teleop`, run the ordinary Python suites
+and explicit ROS checks above. The display-dependent check now exercises real
+Tk widgets and ROS parameter services on **localhost domain 147** with a fake
+backend and temporary preferences; it never launches a driver or connects to a
+robot:
+
+```bash
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/gui_render_check.py
+```
+
+It checks Apply/Save/rejection/readback/conflicts, session changes, stale status,
+mode visibility, restart staging and close. It captures actual window images at
+1440×900, 1366×768 and 1280×720 under `/tmp/ur_teleop_ui_v3_1/`. A working X display
+is required (or run under Xvfb). Pure `test_dashboard_state.py` and
+`test_dashboard_async.py` cover normalized diffs, malformed telemetry,
+notification lifetime, process ownership serialization and request failures.
+Physical commissioning remains a separate supervised activity.

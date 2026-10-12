@@ -112,7 +112,7 @@ def display_value(spec, value):
     if spec.display_inverse:
         return 1. / value
     if isinstance(value, list):
-        return ', '.join(f'{item:g}' for item in value)
+        return ', '.join(f'{item:.12g}' for item in value)
     return value * spec.display_multiplier if isinstance(value, (int, float)) else value
 
 

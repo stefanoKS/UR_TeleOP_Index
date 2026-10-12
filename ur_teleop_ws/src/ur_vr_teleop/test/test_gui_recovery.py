@@ -29,7 +29,7 @@ def panel():
     return SimpleNamespace(last_status_at=time.monotonic(), last_status={
         'mode': 'LIVE OUTPUT', 'armed': False, 'a_held': False, 'enable_requested': False,
         'observations_healthy': True, 'stationary': True, 'robot_ready': True, 'controller_ready': False},
-        message=Mock(), switch_client=Mock(), pending=[], call=Mock(),
+        message=Mock(), notify=Mock(), track_request=Mock(), switch_client=Mock(), pending=[], call=Mock(),
         stale=lambda: False)
 
 

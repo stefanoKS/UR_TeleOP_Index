@@ -5,6 +5,7 @@ import pytest
 from ur_vr_teleop.preferences import (DEFAULTS, PARAMETER_REGISTRY, PARAMETERS_BY_KEY,
                                       load_settings, save_settings, stored_value, validate)
 from ur_vr_teleop.gui import OperatorGUI
+from ur_vr_teleop.dashboard_state import ParameterState
 
 
 def test_saved_tuning_overrides_config_without_restoring_run_permissions(tmp_path):
@@ -43,7 +44,9 @@ def test_parameter_registry_covers_every_saved_key_and_named_gui_values():
         DEFAULTS[spec.key] * spec.display_multiplier if isinstance(DEFAULTS[spec.key], (int, float)) else
         ','.join(map(str, DEFAULTS[spec.key])) if isinstance(DEFAULTS[spec.key], list) else DEFAULTS[spec.key])))
         for spec in PARAMETER_REGISTRY if spec.editable}
-    panel = SimpleNamespace(fields=fields, running_values={})
+    panel = OperatorGUI.__new__(OperatorGUI)
+    panel.fields=fields
+    panel.parameters=ParameterState()
     assert OperatorGUI.field_values(panel) == DEFAULTS
     fields['translation_scale'].get.return_value = '0'
     with pytest.raises(ValueError): OperatorGUI.field_values(panel)
@@ -57,19 +60,23 @@ def test_hidden_compatibility_parameters_are_not_editable_or_submitted():
 
 def test_save_waits_for_backend_acceptance_and_records_requested_restart_limit(tmp_path):
     from rclpy.parameter import Parameter
-    values = dict(DEFAULTS, max_joint_speed_rad_s=.7)
+    values = dict(DEFAULTS, max_joint_speed_rad_s=.7, translation_scale=.9)
     future = object()
     panel = SimpleNamespace(field_values=lambda: values.copy(), settings=Mock(), pending=[],
-        pending_settings={}, last_status={'hardware_smoothing': {'velocity': .5}},
+        parameters=ParameterState(), notify=Mock(), mark_dirty=Mock(), track_request=Mock(),
+        last_status={'armed': False, 'a_held': False, 'hardware_smoothing': {'velocity': .5}},
         alignment=Mock(get=lambda: False), optical=Mock(get=lambda: False), message=Mock(),
         config_path=tmp_path/'config.yaml', stale=lambda: False,
         fields={spec.key: Mock() for spec in PARAMETER_REGISTRY if spec.editable})
+    panel.parameters.receive(DEFAULTS)
+    panel.parameters.draft['max_joint_speed_rad_s']='.7'
+    panel.parameters.draft['translation_scale']=str(1/.9)
     panel.settings.call_async.return_value = future
     OperatorGUI.apply(panel, save=True)
     assert not (tmp_path/'operator_settings.json').exists()
     request = panel.settings.call_async.call_args.args[0]
     assert 'max_joint_speed_rad_s' not in [p.name for p in request.parameters]
-    assert Parameter.from_parameter_msg(next(p for p in request.parameters if p.name == 'translation_scale')).value == pytest.approx(1/1.2)
+    assert Parameter.from_parameter_msg(next(p for p in request.parameters if p.name == 'translation_scale')).value == pytest.approx(.9)
     OperatorGUI.complete_settings(panel, future, SimpleNamespace(successful=False, reason='A is held'))
     assert not (tmp_path/'operator_settings.json').exists()
     panel.pending.clear()
@@ -78,17 +85,22 @@ def test_save_waits_for_backend_acceptance_and_records_requested_restart_limit(t
     document = json.loads((tmp_path/'operator_settings.json').read_text())
     assert document['parameters']['max_joint_speed_rad_s'] == .7
     assert 'alignment_verified' not in document['parameters']
-    assert 'Restart ROS' in panel.message.set.call_args.args[0]
+    assert 'Restart ROS' in panel.settings_result
+    assert panel.parameters.phase == 'readback'
+    assert panel.parameters.effective['max_joint_speed_rad_s'] == .5
 
 
 def test_save_failure_is_distinguished_from_runtime_apply_failure(tmp_path, monkeypatch):
     future = object()
-    panel = SimpleNamespace(pending_settings={future: DEFAULTS}, config_path=tmp_path/'config.yaml',
-                            last_status={}, message=Mock())
+    panel = SimpleNamespace(parameters=ParameterState(), config_path=tmp_path/'config.yaml',
+                            last_status={}, notify=Mock())
+    panel.parameters.receive(DEFAULTS)
+    panel.parameters.begin({},DEFAULTS,True)
     def fail(*args): raise OSError('Disk full')
     monkeypatch.setattr('ur_vr_teleop.gui.save_settings', fail)
     OperatorGUI.complete_settings(panel, future, SimpleNamespace(successful=True))
-    assert 'applied but not saved' in panel.message.set.call_args.args[0]
+    assert 'Applied to current session, but saving failed' in panel.notify.call_args.args[0]
+    assert panel.parameters.phase == 'readback'
 
 
 def test_damping_saves_and_old_profiles_remain_loadable(tmp_path):

@@ -208,3 +208,18 @@ Its controller YAML sets `joint_state_broadcaster.use_local_topics=false` and li
 ## Fixed guards are not tuning parameters
 
 The optical age limit (0.25 s), quality continuity window, pose-jump/freeze guards, velocity sample deadlines, command horizon/age checks, GUI heartbeat deadline, and recovery/hold timing are code constants. See [Architecture](ARCHITECTURE.md). Changing them requires code review and tests; there is no supported GUI switch to bypass them.
+
+### Dashboard readback and drafts
+
+V3.1 uses the complete `effective_parameters` status object for runtime readback;
+see [operator-status contract](OPERATOR_STATUS.md). Saved, drafted and submitted
+values are separate from this baseline. The GUI preserves hidden compatibility
+inputs, formats display units through the named registry and only sends changed
+runtime keys. It never sends `max_joint_speed_rad_s` as a runtime modification.
+A saved joint-speed change remains pending until both teleop and native controller
+report that value after restart. Session verification is never persisted.
+
+The GUI does not infer per-value startup provenance from a numeric match. Consult
+`effective_settings.log` for actual YAML/default/saved source information; that
+startup record is not proof of later runtime values. No defaults, ranges, units,
+persisted keys, or committed operator overrides changed in this stabilization.

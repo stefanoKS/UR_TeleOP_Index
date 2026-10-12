@@ -162,3 +162,5 @@ The standard controller exposes `control_msgs/action/FollowJointTrajectory`; tel
 The D405 uses a C++ librealsense capture child and Python ROS publisher, isolated from robot control. Its mount transform is not calibrated, and the image is not collision protection. Disconnects trigger retries without stopping robot ROS nodes.
 
 The domain-42 `ur_vr_sim_teleop` launch uses `GenericSystem`, `sim_` joints, a forward position controller, 100 Hz Servo, and the original 50 Hz position clutch. It rejects a non-mock URDF and starts motion disabled. It does not test the native real-path smoother or all commissioning checks. Mock integration tests separately exercise the production gate and Servo path on localhost domains 147/148.
+
+Dashboard status fields and parameter synchronization are documented in the [operator-status contract](OPERATOR_STATUS.md).
