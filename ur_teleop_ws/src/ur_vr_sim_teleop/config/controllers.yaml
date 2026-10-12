@@ -1,0 +1,21 @@
+/vr_sim/controller_manager:
+  ros__parameters:
+    update_rate: 100
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    forward_position_controller:
+      type: position_controllers/JointGroupPositionController
+
+/vr_sim/joint_state_broadcaster:
+  ros__parameters:
+    use_local_topics: false
+
+/vr_sim/forward_position_controller:
+  ros__parameters:
+    joints:
+      - sim_shoulder_pan_joint
+      - sim_shoulder_lift_joint
+      - sim_elbow_joint
+      - sim_wrist_1_joint
+      - sim_wrist_2_joint
+      - sim_wrist_3_joint

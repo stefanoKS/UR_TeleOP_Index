@@ -1,0 +1,7 @@
+<library path="ur_teleop_controllers">
+  <class name="ur_teleop_controllers/SmoothScaledJointTrajectoryController"
+         type="ur_teleop_controllers::SmoothScaledJointTrajectoryController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>UR scaled trajectory controller with final joint velocity/acceleration/jerk limiting.</description>
+  </class>
+</library>

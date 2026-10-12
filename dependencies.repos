@@ -1,0 +1,9 @@
+repositories:
+  ur_teleop/tools/libsurvive:
+    type: git
+    url: https://github.com/cntools/libsurvive.git
+    version: df22f2d6be34cb54d43c46e8838eae8b326b88ff
+  ur_calibration_fix_ws/src/Universal_Robots_ROS2_Driver:
+    type: git
+    url: https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
+    version: b8e342428839ca8bcc4a49caf25633a712f9cd2f

@@ -1,0 +1,8 @@
+# Visualization settings only. This is not a commissioned motion configuration.
+/vr_real/real_teleop_preview:
+  ros__parameters:
+    base_frame: base_link
+    tool_frame: tool0
+    translation_scale: 0.8
+    # Initial hypothesis for direction checks, not a calibrated transform.
+    axis_map: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]

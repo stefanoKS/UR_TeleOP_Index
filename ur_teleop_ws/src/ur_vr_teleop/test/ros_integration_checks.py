@@ -1,0 +1,634 @@
+"""Run explicitly: tests create ROS nodes in isolated localhost domain 147.
+
+Not named test_*.py so ordinary unit runs do not require network privileges.
+Transport/startup are real ROS; robot, tracking, TF and graph readiness are mocked.
+No physical command publisher is created.
+"""
+import os
+import json
+from unittest.mock import Mock
+from types import SimpleNamespace
+import pytest
+import rclpy
+from rclpy.parameter import Parameter
+from rcl_interfaces.msg import ParameterValue
+from rcl_interfaces.srv import SetParametersAtomically
+from rclpy.node import Node
+from rclpy.executors import SingleThreadedExecutor
+from std_srvs.srv import Trigger, SetBool
+from geometry_msgs.msg import PoseStamped, TransformStamped
+from sensor_msgs.msg import JointState, Joy
+from std_msgs.msg import Bool
+from std_msgs.msg import Float64
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from rclpy.duration import Duration
+from ur_vr_teleop.commissioning import Commissioning
+from ur_vr_teleop.validation import JOINTS
+import time
+
+
+@pytest.fixture
+def node(monkeypatch):
+    os.environ['ROS_LOCALHOST_ONLY'] = '1'
+    # Explicit context domain wins over env; constructor still validates production env.
+    monkeypatch.setenv('ROS_DOMAIN_ID', '43')
+    rclpy.init(domain_id=147)
+    n = Commissioning()
+    try:
+        yield n
+    finally:
+        n.destroy_node()
+        rclpy.shutdown()
+
+
+def healthy(n):
+    now = n.get_clock().now().to_msg()
+    pose = PoseStamped()
+    pose.header.stamp, pose.header.frame_id = now, 'lighthouse'
+    pose.pose.orientation.w = 1.
+    n.on_pose(pose)
+    joints = JointState()
+    joints.header.stamp = now
+    joints.name, joints.position, joints.velocity = list(JOINTS), [0.]*6, [0.]*6
+    n.on_joints(joints)
+    joy = Joy()
+    joy.header.stamp, joy.buttons = now, [0]*16
+    n.on_joy(joy)
+    n.on_flag(Bool(data=True))
+    n.on_optical(Bool(data=True))
+    t = time.monotonic()
+    n.optical_since = t-1.
+    n.servo_status, n.servo_at = 0, t
+    n.controller_ok, n.controller_at = True, t
+    n.smoothing_controller_present = True
+    n.hardware_smoothing = dict(velocity=.5, acceleration=1., jerk=10.)
+    n.graph_ok, n.graph_at = True, t
+    n.speed_scale, n.scale_at = 1., t
+    n.robot_mode, n.safety_mode, n.program_running = 7, 1, True
+    n.operator_at = t
+    tf = TransformStamped()
+    tf.header.stamp = now
+    tf.transform.translation.x = .4
+    tf.transform.rotation.w = 1.
+    n.tf_buffer.lookup_transform = Mock(return_value=tf)
+    result = n.set_parameters([Parameter('alignment_verified', value=True),
+                               Parameter('optical_loss_test_verified', value=True)])
+    assert all(r.successful for r in result)
+    n.tick()
+
+
+def test_dry_run_has_no_robot_publisher_and_arms_only_when_ready(node):
+    assert node.command_pub is None
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()
+    assert node.gate.armed
+
+
+def test_optical_loss_disarms_without_automatic_recovery(node):
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.on_optical(Bool(data=False))
+    assert not node.gate.armed
+    node.on_optical(Bool(data=True))
+    node.tick()
+    assert not node.gate.armed
+
+
+def test_settings_rejected_while_armed_and_mapping_invalidates_confirmation(node):
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    assert not node.set_parameters([Parameter('max_linear_speed_m_s', value=.01)])[0].successful
+    node.trip('test')
+    assert node.set_parameters([Parameter('tracking_to_robot_rpy_deg', value=[0., 0., 90.])])[0].successful
+    assert node.verified_mapping is None
+
+
+def test_gui_loss_disarms(node):
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.operator_at = time.monotonic()-1.
+    node.tick()
+    assert not node.gate.armed
+
+
+def test_clutch_forwards_only_fresh_post_press_targets_in_dry_run(node):
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()  # release after arming
+    joy = Joy()
+    joy.header.stamp = node.get_clock().now().to_msg()
+    joy.buttons = [0]*16
+    joy.buttons[4] = 1
+    node.on_joy(joy)
+    node.tick()
+    assert node.active_previous
+    target = JointTrajectory()
+    target.header.stamp = node.get_clock().now().to_msg()
+    target.joint_names = list(JOINTS)
+    p = JointTrajectoryPoint()
+    p.positions = [.001]*6
+    p.time_from_start = Duration(seconds=.06).to_msg()
+    target.points = [p]
+    node.on_trajectory(target)
+    assert node.forwarded == 1
+    joy.buttons[4] = 0
+    node.on_joy(joy)
+    node.on_trajectory(target)
+    assert node.forwarded == 1
+    node.tick()
+    assert node.gate.armed
+
+
+def test_malformed_servo_command_latches_disarm(node):
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()
+    node.pressed = True
+    node.tick()
+    node.on_trajectory(JointTrajectory())
+    assert not node.gate.armed
+
+
+@pytest.mark.parametrize('fault', ['tracking', 'feedback', 'servo', 'scale', 'controller', 'graph', 'action'])
+def test_health_faults_disarm(node, fault):
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()
+    if fault == 'tracking': node.on_flag(Bool(data=False))
+    elif fault == 'feedback': node.records['joints'] = (0., 1)
+    elif fault == 'servo': node.servo_status = 2
+    elif fault == 'scale': node.speed_scale = 0.
+    elif fault == 'controller': node.controller_ok = False
+    elif fault == 'graph': node.graph_ok = False
+    elif fault == 'action': node.external_action = True
+    node.tick()
+    assert not node.gate.armed
+
+
+def test_scale_is_percent_and_old_cartesian_ceiling_removed(node):
+    node.on_scale(Float64(data=25.))
+    assert node.speed_scale == .25
+    assert node.set_parameters([Parameter('max_linear_speed_m_s', value=.03)])[0].successful
+
+
+def test_live_output_serialization_and_hold_with_mock_publisher_only(node):
+    healthy(node)
+    # Never create a DDS publisher on the robot topic: inspect calls on a mock.
+    node.motion_output = True
+    node.command_pub = Mock()
+    node.controller_timeout_ok = True
+    node.controller_timeout_at = time.monotonic()
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()
+    node.pressed = True
+    node.tick()
+    target = JointTrajectory()
+    target.header.stamp = node.get_clock().now().to_msg()
+    target.joint_names = list(reversed(JOINTS))
+    point = JointTrajectoryPoint()
+    point.positions = [.001]*6
+    point.time_from_start = Duration(seconds=.02).to_msg()
+    target.points = [point]
+    node.on_trajectory(target)
+    output = node.command_pub.publish.call_args.args[0]
+    assert output.joint_names == list(JOINTS)
+    assert list(output.points[0].positions) == [.001]*6
+    assert output.points[0].time_from_start.nanosec == 20_000_000
+    assert not output.points[0].velocities
+    assert not output.points[0].accelerations
+    node.trip('Test optical loss')
+    node.publish_hold()
+    hold = node.command_pub.publish.call_args.args[0]
+    assert list(hold.points[0].positions) == [0.]*6
+    assert list(hold.points[0].velocities) == [0.]*6
+    assert hold.points[0].time_from_start.nanosec == 100_000_000
+    assert not node.gate.armed
+
+
+def test_no_hold_fabricated_from_stale_feedback(node):
+    healthy(node)
+    node.command_pub = Mock()
+    node.records['joints'] = (0., 1)
+    node.begin_hold()
+    node.publish_hold()
+    node.command_pub.publish.assert_not_called()
+
+
+def test_watchdog_requires_timeout_greater_than_goal_time(node):
+    def read_timeout(timeout, goal_time):
+        response = SimpleNamespace(values=[ParameterValue(type=3, double_value=timeout),
+                                           ParameterValue(type=3, double_value=goal_time)])
+        node.timeout_future = Mock()
+        node.timeout_future.done.return_value = True
+        node.timeout_future.result.return_value = response
+        node.check_graph()
+    read_timeout(.2, 0.)
+    assert node.controller_timeout_ok
+    read_timeout(.2, .3)
+    assert not node.controller_timeout_ok
+    read_timeout(0., 0.)
+    assert not node.controller_timeout_ok
+
+
+def test_live_gate_requires_final_smoothing_not_only_good_watchdog(node):
+    healthy(node)
+    node.motion_output = True
+    node.controller_timeout_ok, node.controller_timeout_at = True, time.monotonic()
+    assert not any('smoothing unavailable' in x for x in node.reasons())
+    node.smoothing_controller_present = False
+    assert any('smoothing unavailable' in x for x in node.reasons())
+    node.smoothing_controller_present = True
+    node.hardware_smoothing = None
+    assert any('smoothing unavailable' in x for x in node.reasons())
+
+
+def test_gui_cannot_silently_exceed_hardware_speed_limit(node):
+    healthy(node)
+    result = node.set_parameters([Parameter('max_joint_speed_rad_s', value=.7)])[0]
+    assert not result.successful and 'Restart ROS' in result.reason
+
+
+def test_gui_settings_over_actual_ros_parameter_service(node):
+    caller = Node('operator_settings_regression_test')
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    executor.add_node(caller)
+    try:
+        client = caller.create_client(SetParametersAtomically, '/vr_real/teleop/set_parameters_atomically')
+        assert client.wait_for_service(timeout_sec=2.)
+        request = SetParametersAtomically.Request()
+        request.parameters = [Parameter(name, value=value).to_parameter_msg() for name, value in [
+            ('max_linear_speed_m_s', .01), ('max_angular_speed_deg_s', 5.),
+            ('translation_scale', 1./1.2), ('rotation_scale', .5),
+            ('vr_translation_deadband_m', .002), ('vr_rotation_deadband_deg', .4),
+            ('tracking_to_robot_rpy_deg', [0., 0., 90.]),
+            ('alignment_verified', True), ('optical_loss_test_verified', False)]]
+        future = client.call_async(request)
+        executor.spin_until_future_complete(future, timeout_sec=3.)
+        assert future.done()
+        assert future.result().result.successful, future.result().result.reason
+        assert tuple(node.get_parameter('tracking_to_robot_rpy_deg').value) == (0., 0., 90.)
+        assert node.verified_mapping == (0., 0., 90.)
+        node.configure()
+        assert node.core.scale == pytest.approx(1./1.2)
+        assert node.core.rotation_scale == .5
+        assert node.core.translation_deadband == .002
+        assert not node.gate.armed
+    finally:
+        executor.remove_node(caller)
+        executor.remove_node(node)
+        executor.shutdown()
+        caller.destroy_node()
+
+
+@pytest.mark.parametrize('future_name,client_name,time_name', [
+    ('controller_future', 'controllers', 'controller_requested_at'),
+    ('timeout_future', 'timeout_client', 'timeout_requested_at'),
+])
+def test_unanswered_readiness_request_retries_without_restoring_health(node, future_name, client_name, time_name):
+    old = Mock()
+    old.done.return_value = False
+    replacement = Mock()
+    client = Mock()
+    client.service_is_ready.return_value = True
+    client.call_async.return_value = replacement
+    setattr(node, future_name, old)
+    setattr(node, client_name, client)
+    setattr(node, time_name, time.monotonic()-2.)
+    node.check_graph()
+    client.remove_pending_request.assert_called_once_with(old)
+    old.cancel.assert_called_once()
+    assert getattr(node, future_name) is replacement
+    assert not node.controller_ok
+    assert not node.controller_timeout_ok
+    assert not node.gate.armed
+    client.call_async.reset_mock()
+    replacement.done.return_value = False
+    node.check_graph()
+    client.call_async.assert_not_called()
+
+
+def test_workspace_stop_reports_actual_limit_and_keeps_first_cause(node):
+    node.workspace_radius = node.core.radius = .5  # Optional fence explicitly enabled.
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()
+    node.pressed = True
+    node.tick()
+    # Small hand steps avoid the separate per-sample jump guard.
+    for _ in range(16):
+        node.hand[0] += .04
+        node.tick()
+    assert not node.gate.armed
+    assert '50 cm workspace radius' in node.gate.reason
+    first = node.gate.reason
+    node.on_optical(Bool(data=False))
+    node.tick()
+    assert node.gate.reason == first
+    assert not node.gate.armed
+
+
+def test_configured_workspace_and_timeout_are_consistent_and_readonly(node):
+    healthy(node)
+    assert node.workspace_radius == 0
+    assert node.core.radius == float('inf')
+    assert node.observation_timeout == .35
+    node.measured_tcp = node.core.home + [.49, 0., 0.]
+    assert not any('Measured tool outside' in s for s in node.reasons())
+    node.measured_tcp = node.core.home + [.51, 0., 0.]
+    assert not any('Measured tool outside' in s for s in node.reasons())
+    assert not node.set_parameters([Parameter('workspace_radius_m', value=.20)])[0].successful
+    assert not node.set_parameters([Parameter('observation_timeout_s', value=.30)])[0].successful
+
+
+@pytest.mark.parametrize('name', ['max_linear_speed_m_s', 'max_angular_speed_deg_s', 'max_joint_speed_rad_s', 'tracking_gain_s_inv'])
+@pytest.mark.parametrize('value', [0., -1., float('inf'), float('nan')])
+def test_speed_settings_reject_nonpositive_or_nonfinite(node, name, value):
+    assert not node.set_parameters([Parameter(name, value=value)])[0].successful
+
+
+def test_editable_cartesian_and_joint_limits_apply_together_without_arming(node):
+    healthy(node)
+    result = node.set_parameters_atomically([
+        Parameter('max_linear_speed_m_s', value=.08),
+        Parameter('max_angular_speed_deg_s', value=30.),
+        Parameter('max_joint_speed_rad_s', value=.5)])
+    assert result.successful
+    node.tick()
+    assert node.core.max_speed == .08
+    assert node.core.max_angular_speed == pytest.approx(.5235987756)
+    assert node.gate.max_joint_speed == .5
+    node.joint_velocity[:] = .2
+    assert not any('Measured joint velocity' in s for s in node.reasons())
+    node.joint_velocity[:] = .61
+    assert any('Measured joint velocity' in s for s in node.reasons())
+    assert not node.gate.armed
+    node.pressed = True
+    assert not node.set_parameters([Parameter('max_joint_speed_rad_s', value=.6)])[0].successful
+    node.pressed = False
+    node.gate.armed = True
+    assert not node.set_parameters([Parameter('max_joint_speed_rad_s', value=.6)])[0].successful
+
+
+def enable_and_recover(node):
+    healthy(node)
+    assert node.set_enabled(SetBool.Request(data=True), SetBool.Response()).success
+    node.tick()
+    assert not node.gate.armed  # Stable recovery interval is required.
+    node.recovery_since = time.monotonic()-.51
+    node.tick()
+    assert node.gate.armed
+    assert not node.active_previous
+    node.tick()  # Observe A released after establishing the new clutch reference.
+
+
+def test_persistent_enable_survives_fault_but_held_a_never_rearms(node):
+    enable_and_recover(node)
+    node.pressed = True
+    node.tick()
+    assert node.active_previous
+    node.on_optical(Bool(data=False))
+    assert node.enable_requested and not node.gate.armed
+    node.on_optical(Bool(data=True))
+    node.optical_since = time.monotonic()-1.
+    node.recovery_since = time.monotonic()-1.
+    node.tick()
+    assert not node.gate.armed and not node.active_previous
+    assert node.recovery_since is None
+    node.pressed = False
+    node.tick()
+    assert not node.gate.armed
+    node.recovery_since = time.monotonic()-.51
+    node.tick()
+    assert node.gate.armed and not node.active_previous
+    node.tick()
+    node.pressed = True
+    node.tick()
+    assert node.active_previous
+
+
+def test_uncheck_and_gui_loss_clear_enable_intent(node):
+    enable_and_recover(node)
+    assert node.set_enabled(SetBool.Request(data=False), SetBool.Response()).success
+    assert not node.enable_requested and not node.gate.armed
+    enable_and_recover(node)
+    node.on_operator(Bool(data=False))
+    assert not node.enable_requested and not node.gate.armed
+    assert not node.set_enabled(SetBool.Request(data=True), SetBool.Response()).success
+
+
+def test_heartbeat_expiry_clears_enable_and_motion(node):
+    enable_and_recover(node)
+    node.operator_at = time.monotonic()-1.
+    node.tick()
+    assert not node.enable_requested and not node.gate.armed
+
+
+def test_held_a_or_unhealthy_input_prevents_enable_recovery(node):
+    healthy(node)
+    node.pressed = True
+    assert node.set_enabled(SetBool.Request(data=True), SetBool.Response()).success
+    node.recovery_since = time.monotonic()-1.
+    node.tick()
+    assert not node.gate.armed and node.recovery_since is None
+    node.pressed = False
+    node.controller_ok = False
+    node.recovery_since = time.monotonic()-1.
+    node.tick()
+    assert not node.gate.armed and node.recovery_since is None
+
+
+def test_motion_prevents_persistent_enable_recovery(node):
+    healthy(node)
+    assert node.set_enabled(SetBool.Request(data=True), SetBool.Response()).success
+    node.joint_velocity[:] = .03
+    node.recovery_since = time.monotonic()-1.
+    node.tick()
+    assert not node.gate.armed and node.recovery_since is None
+
+
+def test_enable_checkbox_protocol_over_actual_ros_service(node):
+    healthy(node)
+    caller = Node('enable_checkbox_protocol_test')
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    executor.add_node(caller)
+    try:
+        client = caller.create_client(SetBool, '/vr_real/set_enabled')
+        assert client.wait_for_service(timeout_sec=2.)
+        node.operator_at = time.monotonic()
+        future = client.call_async(SetBool.Request(data=True))
+        executor.spin_until_future_complete(future, timeout_sec=2.)
+        assert future.done() and future.result().success
+        assert node.enable_requested
+        future = client.call_async(SetBool.Request(data=False))
+        executor.spin_until_future_complete(future, timeout_sec=2.)
+        assert future.done() and future.result().success
+        assert not node.enable_requested and not node.gate.armed
+    finally:
+        executor.remove_node(caller)
+        executor.remove_node(node)
+        executor.shutdown()
+        caller.destroy_node()
+
+
+def test_real_tracking_gain_and_scale_apply_without_a_fixed_home_fence(node):
+    healthy(node)
+    assert node.core.scale == pytest.approx(1./1.2)
+    assert node.core.response_gain == 2.
+    assert node.set_parameters_atomically([Parameter('vr_translation_filter_alpha', value=1.)]).successful
+    assert node.set_parameters_atomically([Parameter('tracking_gain_s_inv', value=12.)]).successful
+    node.tick()
+    assert node.core.response_gain == 12.
+    # Synthetic input only; no hardware publisher exists in this fixture.
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.tick()
+    node.pressed = True
+    node.tick()
+    for _ in range(16):
+        node.hand[0] += .04
+        node.records['pose'] = (time.monotonic(), node.get_clock().now().nanoseconds)
+        node.tick()
+    assert node.gate.armed
+    assert node.core.target[0]-node.core.home[0] == pytest.approx((.64-.001)/1.2)
+    assert node.core.state == 'ACTIVE'
+
+
+def test_displacement_display_works_without_enabling_motion(node):
+    healthy(node)
+    assert node.set_parameters_atomically([Parameter('vr_translation_filter_alpha', value=1.)]).successful
+    node.tick()
+    node.operator_status = Mock()
+    node.twist = Mock()
+    node.pressed = True
+    node.tick()
+    for _ in range(5):
+        node.hand[0] += .02
+        node.records['pose'] = (time.monotonic(), node.get_clock().now().nanoseconds)
+        node.tick()
+    data = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert data['motion_metrics_current']
+    assert data['motion_metrics']['hand_m'] == pytest.approx(.1)
+    assert data['motion_metrics']['target_m'] == pytest.approx((.1-.001)/1.2)
+    assert data['motion_metrics']['tool_m'] == pytest.approx(0.)
+    assert not node.gate.armed and node.command_pub is None
+    assert node.twist.publish.call_args.args[0].twist.linear.x == 0.
+    node.pressed = False
+    node.tick()
+    data = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert not data['motion_metrics_current']
+    assert data['motion_metrics']['target_m'] == pytest.approx((.1-.001)/1.2)
+
+
+@pytest.mark.parametrize('name,value', [('max_linear_acceleration_m_s2', 0.),
+    ('max_angular_acceleration_rad_s2', -1.), ('joint_acceleration_warning_rad_s2', float('nan')),
+    ('vr_translation_filter_alpha', 0.), ('vr_rotation_filter_alpha', 1.1)])
+def test_invalid_smoothing_parameters_rejected(node, name, value):
+    assert not node.set_parameters_atomically([Parameter(name, value=value)]).successful
+
+
+def test_smoothing_parameters_apply_and_disabled_gate_resets_velocity(node):
+    healthy(node)
+    assert node.set_parameters_atomically([
+        Parameter('max_linear_acceleration_m_s2', value=.4),
+        Parameter('max_angular_acceleration_rad_s2', value=1.),
+        Parameter('vr_translation_filter_alpha', value=1.),
+        Parameter('vr_rotation_filter_alpha', value=.9),
+        Parameter('joint_acceleration_warning_rad_s2', value=3.)]).successful
+    node.tick()
+    assert node.core.linear_acceleration == .4
+    assert node.core.angular_acceleration == 1.
+    assert node.core.translation_filter_alpha == 1.
+    assert node.joint_acceleration_warning == 3.
+    node.core.velocity[:] = 1.
+    node.tick()
+    assert all(v == 0. for v in node.core.velocity)
+
+
+def test_native_ramp_lag_does_not_trip_but_large_target_recovers_with_release_only(node):
+    enable_and_recover(node)
+    node.motion_output = True
+    node.controller_timeout_ok, node.controller_timeout_at = True, time.monotonic()
+    node.command_pub = Mock()  # No real command publisher, localhost domain 147.
+    node.pressed = True
+    node.tick()
+    target = JointTrajectory()
+    target.joint_names = list(JOINTS)
+    point = JointTrajectoryPoint()
+    point.positions = [.012]*6  # Larger than the obsolete 5 mrad per-period bound.
+    point.time_from_start = Duration(seconds=.01).to_msg()
+    target.points = [point]
+    target.header.stamp = node.get_clock().now().to_msg()
+    node.on_trajectory(target)
+    assert node.gate.armed and node.forwarded == 1
+    assert node.command_pub.publish.call_count == 1
+    point.positions = [.06]*6  # Still reject an excessive requested lead.
+    target.header.stamp = node.get_clock().now().to_msg()
+    node.on_trajectory(target)
+    assert not node.gate.armed and node.enable_requested
+    node.tick()  # Held A must never recover.
+    assert not node.gate.armed
+    node.pressed = False
+    node.tick()
+    node.recovery_since = time.monotonic()-.51
+    node.tick()
+    assert node.gate.armed and not node.active_previous
+    node.tick()
+    node.pressed = True
+    node.tick()
+    assert node.active_previous  # No disarm/start-Servo/re-enable cycle required.
+
+
+def test_real_servo_velocities_preserved_with_joint_order_and_zero_stop(node):
+    enable_and_recover(node)
+    node.motion_output = True
+    node.controller_timeout_ok, node.controller_timeout_at = True, time.monotonic()
+    node.command_pub = Mock()
+    node.pressed = True
+    node.tick()
+    target = JointTrajectory()
+    target.joint_names = list(reversed(JOINTS))
+    point = JointTrajectoryPoint()
+    point.positions = [.003]*6
+    point.velocities = [.1, .2, .3, .4, .5, .6]
+    point.time_from_start = Duration(seconds=.01).to_msg()
+    target.points = [point]
+    target.header.stamp = node.get_clock().now().to_msg()
+    node.on_trajectory(target)
+    sent = node.command_pub.publish.call_args.args[0]
+    assert list(sent.points[0].velocities) == list(reversed(point.velocities))
+    assert sent.points[0].time_from_start == point.time_from_start
+    point.velocities = [0.]*6
+    target.header.stamp = node.get_clock().now().to_msg()
+    node.on_trajectory(target)
+    assert list(node.command_pub.publish.call_args.args[0].points[0].velocities) == [0.]*6
+
+
+def test_lower_gui_joint_setting_cannot_claim_a_different_native_limit(node):
+    healthy(node)
+    result = node.set_parameters_atomically([Parameter('max_joint_speed_rad_s', value=.2)])
+    assert not result.successful and 'Restart ROS' in result.reason
+
+
+def test_damping_parameters_apply_and_are_reported_without_enabling(node):
+    healthy(node)
+    values = {'translation_damping_gain': .7, 'rotation_damping_gain': 0., 'damping_velocity_filter_s': .08}
+    assert node.set_parameters_atomically([Parameter(k, value=v) for k, v in values.items()]).successful
+    node.operator_status = Mock()
+    node.tick()
+    status = json.loads(node.operator_status.publish.call_args.args[0].data)
+    for key, value in values.items():
+        assert status[key] == pytest.approx(value)
+        assert getattr(node.core, key) == pytest.approx(value)
+    assert not node.gate.armed
+    node.pressed = True
+    assert not node.set_parameters_atomically([Parameter('translation_damping_gain', value=1.)]).successful
+
+
+@pytest.mark.parametrize('key,value', [('translation_damping_gain', -1.), ('rotation_damping_gain', 1.01),
+    ('translation_damping_gain', float('nan')), ('damping_velocity_filter_s', 0.),
+    ('damping_velocity_filter_s', .201)])
+def test_invalid_damping_is_rejected(node, key, value):
+    assert not node.set_parameters_atomically([Parameter(key, value=value)]).successful

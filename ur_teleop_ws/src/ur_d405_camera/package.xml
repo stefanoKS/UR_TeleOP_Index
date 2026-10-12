@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ur_d405_camera</name><version>0.1.0</version>
+  <description>Optional D405 RGB and metric depth streams, independent of teleoperation.</description>
+  <maintainer email="maintainer@example.com">Local teleoperation project</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>python3-numpy</exec_depend><depend>sensor_msgs</depend><depend>std_msgs</depend><depend>librealsense2</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

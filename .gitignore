@@ -1,0 +1,23 @@
+# Generated ROS and Python files
+build/
+install/
+log/
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+# Local history, sessions and diagnostics
+backups/
+migration_backup_*/
+diagnostics/
+*.log
+*.zip
+*.backup
+*.before_*
+motion_diagnostic_*.json
+.desktop.lock
+.managed_session.json
+# Fetch these upstream checkouts using dependencies.repos
+/ur_teleop/tools/libsurvive/
+/ur_calibration_fix_ws/src/Universal_Robots_ROS2_Driver/

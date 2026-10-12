@@ -1,0 +1,44 @@
+# Commissioning settings. Launch defaults to DRY RUN; no driver is started here.
+robot:
+  ip: 192.168.1.251
+  calibration_file: /home/ubuntu-ros/Documents/Teleop/ur_teleop/config/ur10e_calibration.yaml
+  servoj_gain: 500  # Managed launcher only; requires driver restart
+  servoj_lookahead_time: 0.03
+  joint_command_acceleration_rad_s2: 1.0  # Final controller stage; restart ROS to apply
+  joint_command_jerk_rad_s3: 10.0
+teleop:
+  base_frame: base_link
+  tool_frame: tool0
+  translation_scale: 0.8333333333333334  # VR:robot = 1.2:1
+  rotation_scale: 1.0
+  vr_translation_deadband_m: 0.001  # Spatial jitter band; zero disables
+  vr_rotation_deadband_deg: 0.3
+  translation_damping_gain: 0.0  # Measured tool velocity feedback; 0 disables
+  rotation_damping_gain: 0.0
+  damping_velocity_filter_s: 0.05  # Filter measured velocity, not VR target
+  workspace_radius_m: 0.0  # No startup-centered workspace fence
+  observation_timeout_s: 0.35
+  max_linear_speed_m_s: 0.10
+  max_angular_speed_deg_s: 30.0
+  max_joint_speed_rad_s: 0.50
+  tracking_gain_s_inv: 2.0  # velocity = 2 * pose error, with existing speed limits
+  max_linear_acceleration_m_s2: 0.25
+  max_angular_acceleration_rad_s2: 1.5707963267948966
+  vr_translation_filter_alpha: 0.8  # New-sample EMA; 1.0 disables
+  vr_rotation_filter_alpha: 0.8
+  joint_acceleration_warning_rad_s2: 5.0  # Diagnostic threshold only
+  tracking_to_robot_rpy_deg: [0.0, 0.0, -90.0]
+  alignment_verified: false
+  optical_loss_test_verified: false
+# Fixed commissioning bounds implemented by the gate:
+# workspace disabled (0); optional startup radius 0.05–0.50 m, optical 0.25 s,
+# observation freshness default 0.35 s (startup-only, max 0.50),
+# With verified native smoothing, upstream requested joint lead is bounded at 0.05 rad;
+# final actuator v/a/jerk remain bounded in the native 500 Hz controller.
+# segment horizon <=0.10 s; GUI speeds must be finite and positive.
+# Apply and save parameters stores operator_settings.json beside this file.
+# Saved tuning overrides teleop values on launch; run permissions are not saved.
+
+camera:
+  enabled: true  # Optional capture; disconnect does not stop robot ROS nodes
+  serial: "230322276078"  # Wrist D405, RGB + metric depth at 640x480 / 15 FPS

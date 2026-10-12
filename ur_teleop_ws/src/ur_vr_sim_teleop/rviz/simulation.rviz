@@ -1,0 +1,56 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: sim_base_link
+    Background Color: 35; 35; 35
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (10 cm)
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 30
+      Reference Frame: sim_base_link
+    - Class: rviz_default_plugins/RobotModel
+      Name: Simulated UR10e
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /vr_sim/robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+        Depth: 1
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/Marker
+      Name: Orange hand target
+      Enabled: true
+      Topic:
+        Value: /vr_sim/target_marker
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
+    - Class: rviz_default_plugins/Axes
+      Name: Tool axes
+      Enabled: true
+      Reference Frame: sim_tool0
+      Length: 0.15
+      Radius: 0.01
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 2.5
+      Pitch: 0.5
+      Yaw: 0.7
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.6
+Window Geometry:
+  Width: 1200
+  Height: 800
