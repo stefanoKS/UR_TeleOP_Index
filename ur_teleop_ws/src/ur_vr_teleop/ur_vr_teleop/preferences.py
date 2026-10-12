@@ -18,6 +18,10 @@ DEFAULTS = {
     'vr_translation_deadband_m': .001, 'vr_rotation_deadband_deg': .3,
     'translation_damping_gain': 0., 'rotation_damping_gain': 0.,
     'damping_velocity_filter_s': .05,
+    'teleop_control_mode': 'velocity',
+    'tracking_station_policy': 'two_station_strict',
+    'linear_velocity_filter_s': .04, 'angular_velocity_filter_s': .04,
+    'single_station_motion_scale': .25,
 }
 FIELD_PARAMETERS = list(DEFAULTS)
 
@@ -26,6 +30,18 @@ def validate(values):
     if not isinstance(values, dict) or set(values)-set(DEFAULTS):
         raise ValueError('Saved settings contain unsupported fields')
     for key, value in values.items():
+        choices = {'teleop_control_mode': ('position', 'velocity'),
+                   'tracking_station_policy': ('two_station_strict', 'single_station_experimental')}
+        if key in choices:
+            if value not in choices[key]:
+                raise ValueError(key + ' must be one of ' + str(choices[key]))
+            continue
+        if key in ('linear_velocity_filter_s', 'angular_velocity_filter_s'):
+            if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= .2:
+                raise ValueError(key + ' must be 0–0.2 seconds')
+            continue
+        if key == 'single_station_motion_scale' and (type(value) not in (int, float) or not .01 <= value <= 1.):
+            raise ValueError('Single station motion scale must be 0.01–1')
         if key == 'tracking_to_robot_rpy_deg':
             if not isinstance(value, list) or len(value) != 3:
                 raise ValueError('Alignment requires three angles')

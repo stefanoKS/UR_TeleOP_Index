@@ -18,7 +18,7 @@ from rclpy.executors import SingleThreadedExecutor
 from std_srvs.srv import Trigger, SetBool
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from sensor_msgs.msg import JointState, Joy
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_msgs.msg import Float64
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from rclpy.duration import Duration
@@ -56,6 +56,7 @@ def healthy(n):
     n.on_joy(joy)
     n.on_flag(Bool(data=True))
     n.on_optical(Bool(data=True))
+    n.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): LH0=4 LH1=4'))
     t = time.monotonic()
     n.optical_since = t-1.
     n.servo_status, n.servo_at = 0, t
@@ -311,6 +312,7 @@ def test_unanswered_readiness_request_retries_without_restoring_health(node, fut
 
 
 def test_workspace_stop_reports_actual_limit_and_keeps_first_cause(node):
+    assert node.set_parameters_atomically([Parameter('teleop_control_mode', value='position')]).successful
     node.workspace_radius = node.core.radius = .5  # Optional fence explicitly enabled.
     healthy(node)
     assert node.arm(Trigger.Request(), Trigger.Response()).success
@@ -475,6 +477,7 @@ def test_enable_checkbox_protocol_over_actual_ros_service(node):
 
 
 def test_real_tracking_gain_and_scale_apply_without_a_fixed_home_fence(node):
+    assert node.set_parameters_atomically([Parameter('teleop_control_mode', value='position')]).successful
     healthy(node)
     assert node.core.scale == pytest.approx(1./1.2)
     assert node.core.response_gain == 2.
@@ -497,6 +500,7 @@ def test_real_tracking_gain_and_scale_apply_without_a_fixed_home_fence(node):
 
 
 def test_displacement_display_works_without_enabling_motion(node):
+    assert node.set_parameters_atomically([Parameter('teleop_control_mode', value='position')]).successful
     healthy(node)
     assert node.set_parameters_atomically([Parameter('vr_translation_filter_alpha', value=1.)]).successful
     node.tick()
@@ -632,3 +636,139 @@ def test_damping_parameters_apply_and_are_reported_without_enabling(node):
     ('damping_velocity_filter_s', .201)])
 def test_invalid_damping_is_rejected(node, key, value):
     assert not node.set_parameters_atomically([Parameter(key, value=value)]).successful
+
+
+def test_velocity_mode_switch_requires_disarm_release_and_resets_history(node):
+    healthy(node)
+    assert node.core.control_mode == 'velocity'
+    node.core.velocity[:] = .1
+    node.core.velocity_sample = 123
+    node.pressed = True
+    assert not node.set_parameters_atomically([Parameter('teleop_control_mode', value='position')]).successful
+    node.pressed = False
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    assert not node.set_parameters_atomically([Parameter('teleop_control_mode', value='position')]).successful
+    node.disarm(None, Trigger.Response())
+    assert node.set_parameters_atomically([Parameter('teleop_control_mode', value='position')]).successful
+    assert node.core.velocity_sample is None
+    assert not node.core.velocity.any()
+    node.tick()
+    assert node.core.control_mode == 'position'
+
+
+def experimental_ready(node):
+    assert node.set_parameters_atomically([Parameter('tracking_station_policy', value='single_station_experimental')]).successful
+    healthy(node)
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): LH0=0 LH1=1'))
+    node.optical_since = time.monotonic()-1.
+    # Independent solver stream, not an optical-only readiness override.
+    from ur_vr_teleop.tracking_quality import PoseQuality
+    node.pose_quality = PoseQuality()
+    now = node.get_clock().now().nanoseconds
+    for i in range(16):
+        pose = PoseStamped()
+        pose.header.frame_id = 'lighthouse'
+        pose.header.stamp = rclpy.time.Time(nanoseconds=now-(15-i)*10_000_000).to_msg()
+        pose.pose.orientation.w = 1.
+        pose.pose.position.x = i*.00001
+        node.on_pose(pose)
+    node.tick()
+
+
+def test_single_station_signal_plus_continuous_pose_qualifies_experimental_gate(node):
+    experimental_ready(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    assert node.core.max_speed == pytest.approx(.025)
+    assert node.core.linear_acceleration == pytest.approx(.0625)
+    assert node.core.max_angular_speed == pytest.approx(3.141592653589793/24)
+    assert node.command_pub is None
+
+
+def test_single_optical_observation_without_pose_cannot_arm(node):
+    experimental_ready(node)
+    node.pose_ok = False
+    node.tick()
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
+    assert node.optical  # Optical presence is independent.
+
+
+def test_single_station_loss_reacquisition_and_jump_require_fresh_clutch(node):
+    experimental_ready(node)
+    node.enable_requested = True
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.pressed = True
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): LH0=0 LH1=0'))
+    assert not node.gate.armed
+    node.on_optical_detail(String(data='Gen2 accepted paired sensors (250 ms): LH0=1 LH1=0'))
+    node.optical_since = time.monotonic()-1.
+    node.recover_enabled_gate([])
+    assert not node.gate.armed
+    pose = PoseStamped()
+    pose.header.frame_id = 'lighthouse'
+    pose.header.stamp = node.get_clock().now().to_msg()
+    pose.pose.orientation.w = 1.
+    pose.pose.position.x = .4
+    node.on_pose(pose)
+    assert not node.pose_ok and node.core.state == 'WAIT_RELEASE'
+    node.tick()
+    assert not node.gate.armed and not node.core.velocity.any()
+
+
+def test_effective_new_settings_in_status(node):
+    healthy(node)
+    node.operator_status = Mock()
+    node.tick()
+    data = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert data['teleop_control_mode'] == 'velocity'
+    assert data['tracking_station_policy'] == 'two_station_strict'
+    assert data['active_station_count'] == 2
+    assert data['optical_stations'] == {'0': 4, '1': 4}
+    assert data['linear_velocity_filter_s'] == .04
+
+
+def test_offline_synthetic_bag_comparison(tmp_path):
+    """Exercise actual ROS2 bag serialization/reading, without any ROS publisher."""
+    import importlib.util
+    from pathlib import Path
+    import rosbag2_py
+    from rclpy.serialization import serialize_message
+    from ur_vr_teleop.comparison import simulate
+    path = tmp_path/'synthetic_comparison'
+    writer = rosbag2_py.SequentialWriter()
+    writer.open(rosbag2_py.StorageOptions(uri=str(path), storage_id='sqlite3'),
+                rosbag2_py.ConverterOptions('', ''))
+    writer.create_topic(rosbag2_py.TopicMetadata(name='/vr_real/operator_status',
+        type='std_msgs/msg/String', serialization_format='cdr'))
+    for offset, mode in enumerate(('position', 'velocity')):
+        for row in simulate(mode, 'reversal'):
+            diagnostic = {'observed_hand_velocity': [row['hand_speed'], 0., 0., 0., 0., 0.],
+                'filtered_hand_velocity': [row['hand_speed'], 0., 0., 0., 0., 0.],
+                'measured_tcp_velocity': [row['velocity'], 0., 0., 0., 0., 0.],
+                'measured_tcp_position': [row['position'], 0., 0.],
+                'command_age_s': .01, 'clamped': False}
+            msg = String(data=json.dumps({'teleop_control_mode': mode, 'velocity_diagnostics': diagnostic}))
+            writer.write('/vr_real/operator_status', serialize_message(msg), int((1+offset*10+row['t'])*1e9))
+    del writer
+    script = Path(__file__).resolve().parents[4]/'ur_teleop/scripts/compare_modes.py'
+    spec = importlib.util.spec_from_file_location('compare_modes', script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    report = module.bag_report(str(path))
+    for mode in ('position', 'velocity'):
+        assert report[mode]['samples'] == 800
+        assert report[mode]['stop_latency_s']
+        assert report[mode]['post_stop_events']
+        assert report[mode]['reversal_latency_s']
+        assert report[mode]['command_age_p50_s'] == pytest.approx(.01)
+
+
+@pytest.mark.parametrize('field', ['position', 'quaternion'])
+def test_invalid_tool_tf_faults_without_crashing_diagnostics(node, field):
+    healthy(node)
+    tf = node.tf_buffer.lookup_transform.return_value
+    if field == 'position': tf.transform.translation.x = float('nan')
+    else: tf.transform.rotation.w = 0.
+    node.tick()
+    assert not node.observation_healthy
+    assert not node.gate.armed
+    assert node.measured_tcp_velocity is None

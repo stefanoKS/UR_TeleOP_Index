@@ -56,6 +56,9 @@ def nodes(context):
     motion = LaunchConfiguration('motion_output_enabled').perform(context)
     if motion not in ('true', 'false'):
         raise RuntimeError('motion_output_enabled must be true or false')
+    # Forward the same effective saved mode/policy/tuning snapshot as the GUI.
+    from ur_vr_teleop.preferences import DEFAULTS, validate
+    validate({key: settings['teleop'][key] for key in DEFAULTS})
     teleop = settings['teleop'].copy()
     teleop['motion_output_enabled'] = motion == 'true'
     return [

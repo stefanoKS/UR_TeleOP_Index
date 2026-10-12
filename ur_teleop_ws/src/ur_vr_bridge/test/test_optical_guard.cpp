@@ -3,15 +3,27 @@
 #include <stdexcept>
 void require(bool b) { if (!b) throw std::runtime_error("optical guard assertion failed"); }
 int main() {
+  ur_vr_bridge::OpticalGuard single;
+  single.observe(1, 0, 0, 1, 1.);
+  require(!single.fresh(1.01));
+  single.observe(1, 0, 1, 1, 1.);
+  require(single.fresh(1.01));
+  require(single.counts(1.01).at(1) == 1);
+  require(!single.strict(1.01));
+  single.observe(1, 0, 1, 1, 1.2);
+  require(!single.fresh(1.26));
   ur_vr_bridge::OpticalGuard g;
   require(!g.fresh(10));
   for (int sensor=0; sensor<4; ++sensor) for (int plane=0; plane<2; ++plane)
     g.observe(0,sensor,plane,100,10);
-  require(!g.fresh(10.01)); // One station is insufficient.
+  require(g.fresh(10.01)); // Signal from one station is sufficient.
+  require(!g.strict(10.01)); // Strict motion policy still needs two.
   for (int sensor=0; sensor<4; ++sensor) g.observe(1,sensor,0,100,10);
-  require(!g.fresh(10.01)); // Both planes are required.
+  require(g.fresh(10.01)); // Station 0 remains visible.
+  require(!g.strict(10.01)); // Station 1 still needs both planes.
   for (int sensor=0; sensor<4; ++sensor) g.observe(1,sensor,1,100,10);
   require(g.fresh(10.01));
+  require(g.strict(10.01));
   require(!g.fresh(9.99));
   require(g.fresh(10.16)); // Brief light gaps are tolerated.
   require(g.fresh(10.24));

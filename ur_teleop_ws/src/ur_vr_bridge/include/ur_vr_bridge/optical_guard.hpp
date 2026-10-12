@@ -35,10 +35,15 @@ class OpticalGuard {
     }
     return result;
   }
-  bool fresh(double now) const {
+  bool strict(double now) const {
     int stations = 0;
     for (const auto& entry : counts(now)) if (entry.second >= 4) ++stations;
     return stations >= 2;
+  }
+  bool fresh(double now) const {
+    int stations = 0;
+    for (const auto& entry : counts(now)) if (entry.second >= 1) ++stations;
+    return stations >= 1;
   }
  private:
   struct Sample { uint64_t source = 0; double arrival = -std::numeric_limits<double>::infinity(); };

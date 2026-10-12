@@ -44,11 +44,19 @@ class Preview(Node):
         if not np.isfinite(self.observation_timeout) or not .10 <= self.observation_timeout <= .50:
             raise ValueError('observation_timeout_s must be between 0.10 and 0.50 s')
         self.core = (Clutch if observation_only else TrackingClutch)(mapping, scale=scale)
+        from .tracking_quality import PoseQuality
+        self.pose_quality = PoseQuality()
+        self.observed_hand_velocity = np.zeros(6)
+        self.raw_observed_hand_velocity = np.zeros(6)
+        self.diagnostic_hand = None
+        self.observed_sample_dt = None
         self.records = {}
         self.hand = np.zeros(3)
         self.hand_q = [0., 0., 0., 1.]
         self.pressed = self.pose_ok = self.joy_ok = self.joints_ok = self.flag = False
         self.flag_at = -float('inf')
+        self.diagnostic_feedback = None
+        self.measured_tcp_velocity = None
         self.last_tick = time.monotonic()
         self.last_status = None
         self.tf_buffer = Buffer(cache_time=Duration(seconds=2))
@@ -69,11 +77,32 @@ class Preview(Node):
         self.records[key] = (time.monotonic(), stamp_ns(msg.header.stamp))
 
     def on_pose(self, msg):
-        self.remember('pose', msg)
-        self.pose_ok = msg.header.frame_id == 'lighthouse'
         p, q = msg.pose.position, msg.pose.orientation
-        self.hand = np.array([p.x, p.y, p.z])
-        self.hand_q = [q.x, q.y, q.z, q.w]
+        position, quaternion = [p.x, p.y, p.z], [q.x, q.y, q.z, q.w]
+        self.pose_ok = msg.header.frame_id == 'lighthouse' and self.pose_quality.accept(
+            stamp_ns(msg.header.stamp), position, quaternion)
+        if not self.pose_ok:
+            self.diagnostic_hand = None
+            self.observed_hand_velocity = np.zeros(6)
+            self.core.block(self.pose_quality.reason + '; release A')
+            if hasattr(self, 'gate'):
+                self.trip(self.pose_quality.reason + '; release A')
+            return
+        from ur_vr_sim_teleop.core import orientation
+        current = (stamp_ns(msg.header.stamp), np.array(position), orientation(quaternion))
+        previous = self.diagnostic_hand
+        if previous is not None:
+            interval = (current[0]-previous[0])/1e9
+            self.observed_sample_dt = interval
+            if .001 <= interval <= .10:
+                self.raw_observed_hand_velocity = np.r_[(current[1]-previous[1])/interval,
+                    (current[2]*previous[2].inv()).as_rotvec()/interval]
+                self.observed_hand_velocity += -np.expm1(-interval/.04)*(self.raw_observed_hand_velocity-self.observed_hand_velocity)
+            else:
+                self.observed_hand_velocity = np.zeros(6)
+        self.diagnostic_hand = current
+        self.remember('pose', msg)
+        self.hand, self.hand_q = np.array(position), quaternion
 
     def on_joy(self, msg):
         self.remember('joy', msg)
@@ -106,8 +135,13 @@ class Preview(Node):
             tf_ok = fresh(t, tf_stamp, t, now.nanoseconds, timeout)
             p, q = transform.transform.translation, transform.transform.rotation
             tcp, tcp_q = np.array([p.x, p.y, p.z]), [q.x, q.y, q.z, q.w]
-        except TransformException:
-            pass
+            from ur_vr_sim_teleop.core import orientation
+            orientation(tcp_q)
+            if not np.all(np.isfinite(tcp)):
+                raise ValueError('Nonfinite tool TF')
+        except (TransformException, ValueError):
+            tf_ok = False
+            tcp, tcp_q = np.zeros(3), [0., 0., 0., 1.]
         healthy = healthy and tf_ok
         # Standalone preview displays this target; commissioning also uses its velocity.
         if isinstance(self.core, TrackingClutch):
@@ -139,13 +173,27 @@ class Preview(Node):
                     failures.append(f'{key}: receipt age {(t-receipt)*1000:.0f} ms, source age {source_age}')
             if not tf_ok:
                 failures.append('TF unavailable' if tf_age is None else f'TF age {tf_age*1000:.0f} ms or invalid timestamp')
-            if not self.pose_ok: failures.append('Pose frame invalid (expected lighthouse)')
+            if not self.pose_ok: failures.append('Pose rejected: ' + self.pose_quality.reason + ' (expected lighthouse frame)')
             if not self.joy_ok: failures.append('A-button input invalid')
             if not self.joints_ok: failures.append('Joint names/positions invalid')
             if not self.flag: failures.append('Bridge reports pose not fresh')
             if not 0 <= t-self.flag_at < timeout: failures.append(f'Pose-fresh flag age {(t-self.flag_at)*1000:.0f} ms')
             if not 0 <= tick_age < timeout: failures.append(f'Teleop loop gap {tick_age*1000:.0f} ms')
             self.observation_reason = '; '.join(failures) + f' (observation limit {timeout*1000:.0f} ms); release A'
+        # Independent telemetry continues through clutch release and software
+        # stops; clearing the command estimator must not fake measured standstill.
+        if tf_ok:
+            from ur_vr_sim_teleop.core import orientation
+            current = (tf_stamp, tcp.copy(), orientation(tcp_q))
+            previous = getattr(self, 'diagnostic_feedback', None)
+            if previous is not None and tf_stamp != previous[0]:
+                interval = (tf_stamp-previous[0])/1e9
+                self.measured_tcp_velocity = (np.r_[(tcp-previous[1])/interval,
+                    (current[2]*previous[2].inv()).as_rotvec()/interval].tolist()
+                    if 0 < interval <= .35 else None)
+            self.diagnostic_feedback = current
+        else:
+            self.diagnostic_feedback = self.measured_tcp_velocity = None
         self.measured_tcp = tcp
         text = getattr(self, 'mode_label', 'PREVIEW ONLY') + ' / ' + self.core.state + ' / ' + self.core.reason
         if not healthy:

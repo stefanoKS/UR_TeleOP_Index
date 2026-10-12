@@ -7,6 +7,11 @@ robot:
   joint_command_acceleration_rad_s2: 1.0  # Final controller stage; restart ROS to apply
   joint_command_jerk_rad_s3: 10.0
 teleop:
+  teleop_control_mode: velocity
+  tracking_station_policy: two_station_strict
+  linear_velocity_filter_s: 0.04
+  angular_velocity_filter_s: 0.04
+  single_station_motion_scale: 0.25
   base_frame: base_link
   tool_frame: tool0
   translation_scale: 0.8333333333333334  # VR:robot = 1.2:1

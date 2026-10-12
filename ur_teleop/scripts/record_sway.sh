@@ -6,7 +6,7 @@ source /home/ubuntu-ros/Documents/Teleop/ur_teleop_ws/install/local_setup.bash
 export ROS_DOMAIN_ID=43
 output="/home/ubuntu-ros/Documents/Teleop/ur_teleop/diagnostics/sway_$(date +%Y%m%d_%H%M%S)"
 exec ros2 bag record -o "$output" \
-  /vr/controller/pose /vr/controller/joy /vr/controller/pose_fresh \
+  /vr/controller/source_time /vr/controller/pose /vr/controller/joy /vr/controller/pose_fresh \
   /vr/controller/optical_fresh /vr/controller/optical_status \
   /vr_real/preview_markers /vr_real/preview_state \
   /vr_real/servo_node/delta_twist_cmds /vr_real/servo_node/status \

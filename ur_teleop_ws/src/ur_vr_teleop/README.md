@@ -1,3 +1,10 @@
+# V2 velocity teleoperation
+
+The commissioning default is now velocity-following; position-following remains selectable.
+See [the V2 implementation and commissioning guide](../../../ur_teleop/TELEOP_V2.md)
+for parameters, single-station policy, validation, recording and rollback.
+The older position-mode notes below remain useful for the regression mode.
+
 # UR10e teleop commissioning v0.1.0
 
 This is a local implementation following the other chat's intended workflow;

@@ -60,7 +60,7 @@ class ControllerBridge : public rclcpp::Node {
     previous_sweep_ = survive_install_sweep_angle_fn(survive_simple_get_ctx(ctx_), optical_sweep);
     survive_simple_start_thread(ctx_);
     timer_ = create_wall_timer(std::chrono::milliseconds(10), [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "Observation bridge v0.2.0 started (FLT=%zu bytes). Gen2 optical monitor: >=4 paired sensors from each of >=2 calibrated stations within 250 ms. No robot command publishers. Looking for %s%s%s",
+    RCLCPP_INFO(get_logger(), "Observation bridge v0.2.0 started (FLT=%zu bytes). Gen2 optical monitor: >=1 paired sensor from either calibrated station (signal only) within 250 ms. No robot command publishers. Looking for %s%s%s",
                 sizeof(FLT), device_name_.c_str(), requested_serial_.empty() ? "" : " serial=", requested_serial_.c_str());
     last_diagnostic_ = steady_time();
   }
@@ -157,7 +157,6 @@ class ControllerBridge : public rclcpp::Node {
                        {p.Rot[0], p.Rot[1], p.Rot[2], p.Rot[3]}, steady_time(), q)) return;
     ++accepted_samples_;
     rejection_ = "none";
-    latest_pose_.header.stamp = now();  // ROS receipt time; original source time published separately.
     latest_pose_.header.frame_id = frame_;
     latest_pose_.pose.position.x = p.Pos[0];
     latest_pose_.pose.position.y = p.Pos[1];
@@ -209,12 +208,12 @@ class ControllerBridge : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(optical_mutex_);
       const double t = steady_time();
       std_msgs::msg::Bool optical;
-      optical.data = fresh && optical_guard_.fresh(t);
+      optical.data = !shutdown && optical_guard_.fresh(t);
       optical_pub_->publish(optical);
       std::ostringstream detail;
       detail << "Gen2 accepted paired sensors (250 ms):";
       for (const auto& entry : optical_guard_.counts(t)) detail << " LH" << entry.first << "=" << entry.second;
-      detail << "; require >=4 on each of >=2 stations; optical_fresh=" << (optical.data ? "true" : "false");
+      detail << "; signal requires >=1 pair on either calibrated station; optical_fresh=" << (optical.data ? "true" : "false");
       std_msgs::msg::String message;
       message.data = detail.str();
       optical_detail_pub_->publish(message);
@@ -235,6 +234,21 @@ class ControllerBridge : public rclcpp::Node {
     joy_pub_->publish(joy);
 
     if (fresh && new_pose_) {
+      // Anchor on the latest drained sample, not the oldest startup queue event.
+      // Thereafter source intervals survive ROS timer and queue jitter unchanged.
+      if (!source_anchor_set_) {
+        source_anchor_ = latest_source_;
+        ros_anchor_ns_ = now().nanoseconds();
+        source_anchor_set_ = true;
+      }
+      const double elapsed = latest_source_ - source_anchor_;
+      // Bound conversion before casting to nanoseconds. Never silently re-anchor.
+      if (!std::isfinite(elapsed) || elapsed < 0. || elapsed > 1.e7) {
+        RCLCPP_ERROR(get_logger(), "Invalid solver clock mapping; restart tracking bridge");
+        rclcpp::shutdown();
+        return;
+      }
+      latest_pose_.header.stamp = rclcpp::Time(ros_anchor_ns_ + static_cast<int64_t>(elapsed*1e9));
       pose_pub_->publish(latest_pose_);
       std_msgs::msg::Float64 source;
       source.data = latest_source_;
@@ -296,6 +310,9 @@ class ControllerBridge : public rclcpp::Node {
   std::vector<char*> lib_argv_;
   const SurviveSimpleObject* selected_ = nullptr;
   std::string device_name_, requested_serial_, frame_, child_;
+  bool source_anchor_set_ = false;
+  double source_anchor_ = 0.;
+  int64_t ros_anchor_ns_ = 0;
   double timeout_ = 0.25, latest_source_ = 0;
   double last_diagnostic_ = 0;
   double last_raw_source_ = std::numeric_limits<double>::quiet_NaN();

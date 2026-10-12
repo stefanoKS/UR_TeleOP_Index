@@ -20,6 +20,11 @@ try:
         'optical': False, 'servo': 0, 'accepted_targets': 0,
         'reason': 'Disarmed at startup',
         'session_id': 'gui-render-test',
+        'teleop_control_mode': 'velocity', 'tracking_station_policy': 'single_station_experimental',
+        'linear_velocity_filter_s': .04, 'angular_velocity_filter_s': .06,
+        'single_station_motion_scale': .25, 'optical_stations': {'0': 0, '1': 1},
+        'active_station_count': 1, 'pose_fresh': True, 'motion_ready': False,
+        'tracking_rejection': 'none',
         'workspace_radius_m': 0., 'observation_timeout_s': .35, 'linear': .1, 'angular': 30., 'joint_speed': .5, 'tracking_gain': 2.,
         'translation_scale': 1./1.2, 'rotation_scale': 1., 'control_period_s': .01, 'alignment_rpy_deg': [0., 0., -90.],
         'hardware_smoothing': {'velocity': .5, 'acceleration': 1., 'jerk': 10.},
@@ -49,6 +54,10 @@ try:
     assert gui.fields[16].get() == '80'
     assert '1 rad/s²' in gui.applied_limits.get() and '10 rad/s³' in gui.applied_limits.get()
     assert 'hand 10.0 / target 10.0 / tool 9.8 cm' in gui.motion.get()
+    assert gui.fields[17].get() == 'velocity'
+    assert gui.fields[18].get() == 'single_station_experimental'
+    assert gui.fields[20].get() == '0.06'
+    assert 'Lighthouse 1: detected (1 paired sensors)' in gui.detail.get()
     assert gui.enabled.get()
     assert 'disabled' not in gui.enable_button.state()
     x, y = gui.root.winfo_rootx(), gui.root.winfo_rooty()

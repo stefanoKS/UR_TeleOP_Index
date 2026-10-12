@@ -97,7 +97,7 @@ class OperatorGUI:
                                           ('Angular speed limit (deg/s)', '30.0'),
                                           ('Alignment RPY (degrees)', '0, 0, 0'),
                                           ('Joint speed (rad/s; save + restart)', '0.5'),
-                                          ('Tracking response (1/s)', '2.0'),
+                                          ('Position-mode response (1/s)', '2.0'),
                                           ('Linear acceleration (m/s²)', '0.25'),
                                           ('Angular acceleration (rad/s²)', '1.5708'),
                                           ('Translation filter alpha (1 = off)', '0.8'),
@@ -109,10 +109,19 @@ class OperatorGUI:
                                           ('Rotation jitter deadband (deg; 0 = off)', '0.3'),
                                           ('Translation damping (0–1; 0 = off)', '0.0'),
                                           ('Rotation damping (0–1; 0 = off)', '0.0'),
-                                          ('Damping velocity filter (ms)', '50')]):
+                                          ('Damping velocity filter (ms)', '50'),
+                                          ('Control mode (position / velocity)', 'velocity'),
+                                          ('Station policy', 'two_station_strict'),
+                                          ('Linear velocity filter (seconds; 0 = off)', '0.04'),
+                                          ('Angular velocity filter (seconds; 0 = off)', '0.04'),
+                                          ('Experimental motion fraction (0.01–1)', '0.25')]):
             ttk.Label(controls, text=label).grid(row=i, column=0, sticky='w', pady=4)
             v = tk.StringVar(value=value)
-            ttk.Entry(controls, textvariable=v, width=26).grid(row=i, column=1, padx=16, pady=4)
+            if i in (17, 18):
+                choices = ('position', 'velocity') if i == 17 else ('two_station_strict', 'single_station_experimental')
+                ttk.Combobox(controls, textvariable=v, values=choices, state='readonly', width=30).grid(row=i, column=1, padx=16, pady=4)
+            else:
+                ttk.Entry(controls, textvariable=v, width=26).grid(row=i, column=1, padx=16, pady=4)
             self.fields[i] = v
         self.alignment = tk.BooleanVar(value=False)
         self.optical = tk.BooleanVar(value=False)
@@ -130,7 +139,7 @@ class OperatorGUI:
         self.reset_button.pack(side='left')
         ttk.Label(self.frame, text='Mapping 1.2 means 12 cm of hand movement requests 10 cm at the robot.\n'
                   'Deadbands ignore small tracking jitter. Filter alpha: lower = smoother/slower; 1 = off.\n'
-                  'Damping opposes measured tool motion; increasing it can slow following.\n'
+                  'Velocity mode uses hand speed; response gain and damping apply only in position mode.\n'
                   'The damping filter smooths measured velocity; more filtering adds delay.\n'
                   'Save restores tuning next launch. Enable and verification checkmarks start off.', wraplength=800).pack(anchor='w', pady=6)
         self.message = tk.StringVar(value='When enabled: faults stop motion. Release A, wait for readiness, then press A again.')
@@ -186,6 +195,10 @@ class OperatorGUI:
                     if key in value:
                         v = 1./value[key] if i in (10, 11) else value[key] * (1000 if i in (12, 16) else 1)
                         self.fields[i].set(f'{v:.12g}')
+                for i in range(17, len(FIELD_PARAMETERS)):
+                    key = FIELD_PARAMETERS[i]
+                    if key in value:
+                        self.fields[i].set(str(value[key]))
                 if 'alignment_rpy_deg' in value:
                     self.fields[2].set(', '.join(str(x) for x in value['alignment_rpy_deg']))
             self.last_status, self.last_status_at = value, time.monotonic()
@@ -274,7 +287,9 @@ class OperatorGUI:
     def field_values(self):
         values = {}
         for i, name in enumerate(FIELD_PARAMETERS):
-            if i == 2:
+            if isinstance(DEFAULTS[name], str):
+                value = self.fields[i].get()
+            elif i == 2:
                 value = [float(x.strip()) for x in self.fields[i].get().split(',')]
             else:
                 value = float(self.fields[i].get())
@@ -293,7 +308,9 @@ class OperatorGUI:
             return
         for i, name in enumerate(FIELD_PARAMETERS):
             value = DEFAULTS[name]
-            if i == 2:
+            if isinstance(value, str):
+                text = value
+            elif i == 2:
                 text = ', '.join(str(v) for v in value)
             else:
                 value = 1./value if i in (10, 11) else value * (1000 if i in (12, 16) else 1)
@@ -365,11 +382,24 @@ class OperatorGUI:
             + ('Dry run computes targets only. The physical arm and robot mesh do not follow your hand.'
                if not stale and str(data.get('mode', '')).startswith('DRY RUN')
                else 'The robot mesh changes only when measured robot joints change.'))
+        if data.get('teleop_control_mode') == 'velocity':
+            self.visual_help.set('Velocity-following: hand speed requests TCP speed. RViz marker shows measured TCP; there is no positional target to chase.')
         if stale:
             self.summary.set('No fresh gate status. Do not infer that the robot has stopped; check the pendant.')
         else:
             self.summary.set(f"Enabled: {'ON' if data.get('enable_requested') else 'OFF'}  |  Gate: {'ARMED' if data.get('armed') else 'DISARMED'}  |  A: {'held' if data.get('a_held') else 'released'}  |  Optical: {'fresh' if data.get('optical') else 'LOST'}  |  Servo: {data.get('servo_detail', data.get('servo'))}\nAccepted targets: {data.get('accepted_targets')}  |  {data.get('reason')}")
-            self.detail.set(str(data.get('optical_detail', '')))
+            stations = data.get('optical_stations', {})
+            station_text = ' | '.join(f"Lighthouse {i}: {'detected' if stations.get(str(i), 0) else 'not detected'} ({stations.get(str(i), 0)} paired sensors)" for i in (0, 1))
+            diagnostic = data.get('velocity_diagnostics', {})
+            def vector(value):
+                return 'unavailable' if value is None else ', '.join(f'{v:.4g}' for v in value)
+            self.detail.set(station_text + f"\nActive stations: {data.get('active_station_count', 0)} | Pose fresh: {data.get('pose_fresh', False)} | Motion ready: {data.get('motion_ready', False)}"
+                + f"\nPolicy: {data.get('tracking_station_policy')} | Control: {data.get('teleop_control_mode')} | Last rejection: {data.get('tracking_rejection')}"
+                + f"\nHand velocity [m/s, rad/s]: {vector(diagnostic.get('observed_hand_velocity', diagnostic.get('filtered_hand_velocity')))}"
+                + f"\nCommand TCP velocity: {vector(diagnostic.get('published_twist'))}"
+                + f"\nMeasured TCP velocity: {vector(diagnostic.get('measured_tcp_velocity'))}"
+                + f"\nScale: {diagnostic.get('motion_scale')} | Clamped: {diagnostic.get('clamped')} | Sample-to-command age (s): {diagnostic.get('command_age_s')}"
+                + '\n' + str(data.get('optical_detail', '')))
         if stale:
             self.applied_limits.set('Applied limits unavailable: gate status stale')
         elif any(key not in data for key in ('workspace_radius_m', 'observation_timeout_s', 'joint_speed', 'tracking_gain', 'translation_scale', 'control_period_s')):

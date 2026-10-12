@@ -19,8 +19,12 @@ teleop disabled, check controller power/charge and receiver connection, power-cy
 the controller, then restart only the bridge. If sensor arrivals continue but poses
 remain invalid, retain the calibration and collect the solver logs for diagnosis.
 
-Optical freshness requires >=4 distinct sensors with both planes recently accepted
-from each of >=2 calibrated stations within 250 ms, plus fresh pose output.
+V2 optical signal freshness requires at least one sensor with both planes recently
+accepted from either calibrated station within 250 ms, independently of pose output.
+Commissioning defaults to `two_station_strict` (four pairs on each of two stations);
+`single_station_experimental` requires separate continuous 6-DoF pose validation.
+Pose headers now preserve solver sample intervals using a fixed ROS/source clock
+anchor; `/vr/controller/source_time` retains the original solver timestamp.
 Repeated/reordered light timestamps do not renew freshness. These are conservative
 commissioning criteria, not a measure of pose accuracy or a safety-rated interlock.
 Gen1 remains optically false in this implementation. Verify loss/recovery on the

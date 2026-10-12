@@ -77,6 +77,12 @@ class Commissioning(Preview):
                             ('tracking_to_robot_rpy_deg', [0., 0., 0.]),
                             ('alignment_verified', False), ('optical_loss_test_verified', False)]:
             self.declare_parameter(name, value)
+        from .preferences import DEFAULTS
+        for name in ('teleop_control_mode', 'tracking_station_policy', 'linear_velocity_filter_s',
+                     'angular_velocity_filter_s', 'single_station_motion_scale'):
+            self.declare_parameter(name, DEFAULTS[name])
+        self.optical_stations = {}
+        self.optical_detail_at = -float('inf')
         self.workspace_radius = self.declare_parameter('workspace_radius_m', 0.,
             ParameterDescriptor(read_only=True)).value
         if not math.isfinite(self.workspace_radius) or not (self.workspace_radius == 0 or .05 <= self.workspace_radius <= .50):
@@ -136,6 +142,17 @@ class Commissioning(Preview):
         self.get_logger().warn('COMMISSIONING: ' + ('LIVE OUTPUT enabled; disarmed' if self.motion_output else 'DRY RUN — no robot command publisher'))
 
     def configure(self):
+        from .preferences import validate
+        extra = {key: self.get_parameter(key).value for key in ('teleop_control_mode', 'tracking_station_policy',
+                 'linear_velocity_filter_s', 'angular_velocity_filter_s', 'single_station_motion_scale')}
+        validate(extra)
+        self.core.control_mode = extra['teleop_control_mode']
+        self.station_policy = extra['tracking_station_policy']
+        self.core.linear_velocity_filter_s = extra['linear_velocity_filter_s']
+        self.core.angular_velocity_filter_s = extra['angular_velocity_filter_s']
+        # Keep the reduced envelope for the entire experimental session, avoiding
+        # a speed step or changed deceleration limit when stations appear/disappear.
+        self.motion_scale = extra['single_station_motion_scale'] if self.station_policy == 'single_station_experimental' else 1.
         linear = self.get_parameter('max_linear_speed_m_s').value
         angular = self.get_parameter('max_angular_speed_deg_s').value
         joint = self.get_parameter('max_joint_speed_rad_s').value
@@ -169,7 +186,9 @@ class Commissioning(Preview):
             raise ValueError('joint_acceleration_warning_rad_s2 must be finite positive')
         if len(mapping) != 3 or not all(math.isfinite(x) for x in mapping):
             raise ValueError('Alignment requires three finite RPY degrees')
-        self.core.max_speed, self.core.max_angular_speed = linear, math.radians(angular)
+        self.core.max_speed, self.core.max_angular_speed = linear*self.motion_scale, math.radians(angular)*self.motion_scale
+        self.core.linear_acceleration *= self.motion_scale
+        self.core.angular_acceleration *= self.motion_scale
         self.core.axis_rotation = Rotation.from_euler('xyz', mapping, degrees=True)
         self.core.rotation = self.core.axis_rotation.as_matrix()
 
@@ -180,7 +199,14 @@ class Commissioning(Preview):
         if self.gate.armed or self.pressed:
             return SetParametersResult(successful=False, reason='Disarm and release A before changing settings')
         for p in params:
-            if p.name in ('translation_scale', 'rotation_scale', 'vr_translation_deadband_m', 'vr_rotation_deadband_deg',
+            if p.name in ('teleop_control_mode', 'tracking_station_policy', 'linear_velocity_filter_s',
+                          'angular_velocity_filter_s', 'single_station_motion_scale'):
+                from .preferences import validate
+                try:
+                    validate({p.name: p.value})
+                except ValueError as exc:
+                    return SetParametersResult(successful=False, reason=str(exc))
+            elif p.name in ('translation_scale', 'rotation_scale', 'vr_translation_deadband_m', 'vr_rotation_deadband_deg',
                            'translation_damping_gain', 'rotation_damping_gain', 'damping_velocity_filter_s'):
                 from .preferences import validate
                 try:
@@ -213,6 +239,8 @@ class Commissioning(Preview):
             self.verified_mapping = None
         if 'alignment_verified' in values:
             self.verified_mapping = tuple(mapping) if values['alignment_verified'] else None
+        if 'tracking_station_policy' in values:
+            self.optical_since = -float('inf')
         self.core.block('Settings changed; release A')
         return SetParametersResult(successful=True)
 
@@ -246,7 +274,25 @@ class Commissioning(Preview):
             self.optical_since = t
         self.optical, self.optical_at = bool(msg.data), t
 
-    def on_optical_detail(self, msg): self.optical_detail = msg.data
+    def on_optical_detail(self, msg):
+        self.optical_detail = msg.data
+        try:
+            import re
+            self.optical_stations = {int(k): int(v) for k, v in re.findall(r'LH(\d+)=(\d+)', msg.data)}
+            self.optical_detail_at = time.monotonic()
+            if not self.policy_optical_ready():
+                self.optical_since = -float('inf')
+                self.trip('Optical station policy not satisfied; release A')
+            elif not math.isfinite(self.optical_since):
+                self.optical_since = time.monotonic()
+        except (ValueError, TypeError):
+            self.optical_stations = {}
+            self.trip('Invalid optical diagnostic; release A')
+
+    def policy_optical_ready(self):
+        from .tracking_quality import optical_ready
+        return (time.monotonic()-self.optical_detail_at < .20 and
+                optical_ready(self.optical_stations, self.station_policy))
     def on_servo(self, msg):
         self.servo_status, self.servo_at = int(msg.data), time.monotonic()
         if self.servo_status not in (0, 1, 3, 6): self.trip(servo_status_detail(self.servo_status))
@@ -322,7 +368,7 @@ class Commissioning(Preview):
             self.timeout_requested_at = now
         # One upstream source per required observation; reject accidental duplicate drivers/bridges.
         topics = ['/joint_states', '/vr/controller/pose', '/vr/controller/joy',
-                  '/vr/controller/pose_fresh', '/vr/controller/optical_fresh', STAGED,
+                  '/vr/controller/pose_fresh', '/vr/controller/optical_fresh', '/vr/controller/optical_status', STAGED,
                   '/vr_real/servo_unstamped_targets',
                   '/vr_real/operator_present',
                   '/io_and_status_controller/robot_mode', '/io_and_status_controller/safety_mode',
@@ -343,8 +389,10 @@ class Commissioning(Preview):
             problems.append(f'Measured joint velocity missing or above {1.2*self.gate.max_joint_speed:g} rad/s (configured joint speed +20%)')
         if self.workspace_radius > 0 and self.core.home is not None and hasattr(self, 'measured_tcp') and np.linalg.norm(self.measured_tcp-self.core.home) > self.core.radius + .001:
             problems.append(f'Measured tool outside {self.core.radius*100:g} cm workspace radius')
-        if not self.optical or t-self.optical_at >= .20 or t-self.optical_since < .5:
-            problems.append('Need stable optical observations from two stations')
+        if not self.optical or not self.policy_optical_ready() or t-self.optical_at >= .20 or t-self.optical_since < .5:
+            problems.append('Need stable optical observations for ' + self.station_policy + '; signal presence alone does not validate a 6-DoF pose')
+        if self.station_policy == 'single_station_experimental' and not self.pose_quality.continuous:
+            problems.append('Experimental tracking needs at least 100 ms of continuous independent 6-DoF poses')
         if t-self.servo_at >= .25: problems.append('Servo status stale (no update for 250 ms)')
         elif self.servo_status not in (0, 1, 3, 6): problems.append(servo_status_detail(self.servo_status))
         if self.robot_mode != 7:
@@ -494,6 +542,31 @@ class Commissioning(Preview):
         self.operator_status.publish(String(data=json.dumps({
             'mode': 'LIVE OUTPUT' if self.motion_output else 'DRY RUN — ROBOT OUTPUT DISABLED',
             'session_id': self.session_id,
+            'teleop_control_mode': self.core.control_mode,
+            'tracking_station_policy': self.station_policy,
+            'single_station_motion_scale': self.get_parameter('single_station_motion_scale').value,
+            'linear_velocity_filter_s': self.core.linear_velocity_filter_s,
+            'angular_velocity_filter_s': self.core.angular_velocity_filter_s,
+            'optical_stations': self.optical_stations if time.monotonic()-self.optical_detail_at < .20 else {k: 0 for k in self.optical_stations},
+            'active_station_count': sum(v > 0 for v in self.optical_stations.values()) if time.monotonic()-self.optical_detail_at < .20 else 0,
+            'pose_fresh': self.pose_ok and self.flag and time.monotonic()-self.flag_at < self.observation_timeout and fresh(*self.records.get('pose', (-1e30, 0)), time.monotonic(), now.nanoseconds, self.observation_timeout),
+            'tracking_rejection': self.pose_quality.reason,
+            'motion_ready': not problems,
+            'velocity_diagnostics': {
+                'raw_pose': self.hand.tolist() + list(self.hand_q) if np.all(np.isfinite(self.hand)) and np.all(np.isfinite(self.hand_q)) else None,
+                'filtered_pose': (self.core.filtered_hand.tolist() + self.core.filtered_rotation.as_quat().tolist()) if self.core.filtered_hand is not None and self.core.filtered_rotation is not None else None,
+                'sample_dt_s': self.core.sample_dt if self.core.control_mode == 'velocity' else self.observed_sample_dt,
+                'observed_hand_velocity': np.r_[self.core.rotation @ self.observed_hand_velocity[:3], self.core.rotation @ self.observed_hand_velocity[3:]].tolist(),
+                'measured_tcp_position': self.measured_tcp.tolist(),
+                'filtered_pose_frame': self.base if self.core.control_mode == 'velocity' else 'lighthouse',
+                'raw_hand_velocity': self.core.raw_hand_velocity.tolist() if self.core.control_mode == 'velocity' else np.r_[self.core.rotation @ self.raw_observed_hand_velocity[:3], self.core.rotation @ self.raw_observed_hand_velocity[3:]].tolist(),
+                'filtered_hand_velocity': self.core.hand_velocity.tolist() if self.core.control_mode == 'velocity' else np.r_[self.core.rotation @ self.observed_hand_velocity[:3], self.core.rotation @ self.observed_hand_velocity[3:]].tolist(),
+                'requested_twist': self.preview_velocity.tolist(),
+                'published_twist': self.preview_velocity.tolist() if active else [0.]*6,
+                'measured_tcp_velocity': self.measured_tcp_velocity,
+                'clamped': self.core.clamped, 'motion_scale': self.motion_scale,
+                'command_age_s': max(0., (now.nanoseconds-self.records['pose'][1])/1e9) if 'pose' in self.records else None,
+            },
             'stationary': self.joint_velocity is not None and bool(np.max(np.abs(self.joint_velocity)) < .02),
             'observations_healthy': self.observation_healthy,
             'robot_ready': self.robot_mode == 7 and self.safety_mode in (1, 2) and self.program_running,
@@ -517,8 +590,8 @@ class Commissioning(Preview):
             'damping_tool_velocity': self.core.measured_velocity.tolist(),
             'linear_acceleration': self.core.linear_acceleration,
             'angular_acceleration_deg': math.degrees(self.core.angular_acceleration),
-            'max_linear_acceleration_m_s2': self.core.linear_acceleration,
-            'max_angular_acceleration_rad_s2': self.core.angular_acceleration,
+            'max_linear_acceleration_m_s2': self.get_parameter('max_linear_acceleration_m_s2').value,
+            'max_angular_acceleration_rad_s2': self.get_parameter('max_angular_acceleration_rad_s2').value,
             'vr_translation_filter_alpha': self.core.translation_filter_alpha,
             'vr_rotation_filter_alpha': self.core.rotation_filter_alpha,
             'joint_acceleration_warning_rad_s2': self.joint_acceleration_warning,
@@ -526,7 +599,7 @@ class Commissioning(Preview):
             'motion_metrics': getattr(self, 'motion_metrics', None),
             'motion_metrics_current': getattr(self, 'motion_metrics_current', False),
             'alignment_rpy_deg': list(self.get_parameter('tracking_to_robot_rpy_deg').value),
-            'linear': self.core.max_speed, 'angular': math.degrees(self.core.max_angular_speed),
+            'linear': self.get_parameter('max_linear_speed_m_s').value, 'angular': self.get_parameter('max_angular_speed_deg_s').value,
         }, allow_nan=False)))
 
     def on_trajectory(self, msg):
