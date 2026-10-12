@@ -14,7 +14,19 @@ The desktop starts Preview automatically. It manages the robot driver, tracking,
 
 `start_gui.sh` opens only the operator panel for an existing stack. It does not start tracking or the driver. Avoid launching duplicate panels or bridges: duplicate command publishers and missing ownership checks can block readiness.
 
-## Understand the panel
+## Understand the dashboard
+
+The operator panel is a single resizable dashboard. At the supported 1366×768
+layout, session controls, readiness, Enable, Disarm, live tracking status, and
+quick tuning remain visible without scrolling. The header shows the output mode
+(Preview/Live) separately from actual readiness. A green optical indicator is
+not a valid-pose or robot-ready claim.
+
+Quick tuning contains the control mode, mapping ratios, and TCP speed limits.
+Use **Show advanced tuning** for motion, tracking, position-only, and
+engineering settings. Position-only fields are hidden in Velocity mode; hiding
+them does not reset their values. The camera button opens the existing optional
+viewer in a separate window; it is not collision sensing.
 
 | Control or display | Meaning |
 |---|---|
@@ -27,9 +39,9 @@ The desktop starts Preview automatically. It manages the robot driver, tracking,
 | Prepare controller | Request activation of the scaled controller when prerequisites pass; cannot evict a competing controller |
 | Enable teleop | Request readiness/arming; A still controls active movement |
 | DISARM TELEOP | Clear enable intent and request a software stop |
-| Apply settings / confirmations (disarmed) | Apply current values and session checks while disarmed with A released |
-| Apply and save parameters | Apply accepted values and persist supported tuning for next launch |
-| Reset to default parameters | Restore default tuning through the panel; review and apply/save deliberately |
+| Apply changes | Submit the edited named settings to the running backend while disarmed with A released |
+| Apply + save | Save accepted persistent tuning for next launch; a changed joint speed still requires Restart ROS |
+| Revert edits / Restore defaults | Revert to current running values, or stage built-in defaults for review; neither silently changes a running stack |
 
 Status explains what is blocking motion. Measured TCP and joint feedback continue when A is released. “Optical present” alone is not “tracking ready”: a valid, fresh pose and continuity checks must also pass.
 
@@ -52,7 +64,7 @@ If tracking has been recalibrated or a station moved, repeat alignment verificat
 
 Release A and disarm before switching modes or applying tuning. Mapping fields show a **VR:robot ratio**: 1.2 means 12 cm of hand travel requests 10 cm of robot travel. The persisted `translation_scale` is its inverse. Deadbands are displayed in millimetres/degrees; some time constants are displayed in milliseconds.
 
-A saved joint-speed change requires restarting the ROS stack because the final native controller reads its limits at startup. The panel retains the current live limit until restart. Check the new effective value afterward. Do not assume clicking Save has altered a startup-only hardware-controller parameter.
+A saved joint-speed change requires restarting the ROS stack because the final native controller reads its limits at startup. The panel retains the current live limit until restart. Check the new effective value afterward. Do not assume clicking Save has altered a startup-only hardware-controller parameter. The panel initially loads effective running values from the commissioning status; edited values are visibly marked as unapplied. Saved preferences are loaded only at the next managed-stack snapshot, where they override YAML tuning as described in Configuration.
 
 ## Authorized live session
 

@@ -2,7 +2,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
-from ur_vr_teleop.preferences import DEFAULTS, FIELD_PARAMETERS, load_settings, save_settings, validate
+from ur_vr_teleop.preferences import (DEFAULTS, PARAMETER_REGISTRY, PARAMETERS_BY_KEY,
+                                      load_settings, save_settings, stored_value, validate)
 from ur_vr_teleop.gui import OperatorGUI
 
 
@@ -34,18 +35,24 @@ def test_invalid_preferences_do_not_replace_previous_save(tmp_path, values):
     assert path.read_text() == original
 
 
-def test_gui_converts_explicit_vr_to_robot_ratios_and_mm():
-    fields = {}
-    for i, key in enumerate(FIELD_PARAMETERS):
-        value = DEFAULTS[key]
-        if i == 2: value = ','.join(map(str, value))
-        elif i in (10, 11): value = str(1/value)
-        elif i in (12, 16): value = str(value*1000)
-        else: value = str(value)
-        fields[i] = Mock(get=Mock(return_value=value))
-    assert OperatorGUI.field_values(SimpleNamespace(fields=fields)) == DEFAULTS
-    fields[10].get.return_value = '0'
-    with pytest.raises(ValueError): OperatorGUI.field_values(SimpleNamespace(fields=fields))
+def test_parameter_registry_covers_every_saved_key_and_named_gui_values():
+    assert set(PARAMETERS_BY_KEY) == set(DEFAULTS)
+    assert len(PARAMETER_REGISTRY) == len(DEFAULTS)
+    fields = {spec.key: Mock(get=Mock(return_value=str(
+        1 / DEFAULTS[spec.key] if spec.display_inverse else
+        DEFAULTS[spec.key] * spec.display_multiplier if isinstance(DEFAULTS[spec.key], (int, float)) else
+        ','.join(map(str, DEFAULTS[spec.key])) if isinstance(DEFAULTS[spec.key], list) else DEFAULTS[spec.key])))
+        for spec in PARAMETER_REGISTRY if spec.editable}
+    panel = SimpleNamespace(fields=fields, running_values={})
+    assert OperatorGUI.field_values(panel) == DEFAULTS
+    fields['translation_scale'].get.return_value = '0'
+    with pytest.raises(ValueError): OperatorGUI.field_values(panel)
+
+
+def test_hidden_compatibility_parameters_are_not_editable_or_submitted():
+    hidden = [spec for spec in PARAMETER_REGISTRY if not spec.editable]
+    assert {spec.key for spec in hidden} == {'tracking_station_policy', 'single_station_motion_scale'}
+    assert all(spec.key not in {item.key for item in PARAMETER_REGISTRY if item.editable} for spec in hidden)
 
 
 def test_save_waits_for_backend_acceptance_and_records_requested_restart_limit(tmp_path):
@@ -55,7 +62,8 @@ def test_save_waits_for_backend_acceptance_and_records_requested_restart_limit(t
     panel = SimpleNamespace(field_values=lambda: values.copy(), settings=Mock(), pending=[],
         pending_settings={}, last_status={'hardware_smoothing': {'velocity': .5}},
         alignment=Mock(get=lambda: False), optical=Mock(get=lambda: False), message=Mock(),
-        config_path=tmp_path/'config.yaml')
+        config_path=tmp_path/'config.yaml', stale=lambda: False,
+        fields={spec.key: Mock() for spec in PARAMETER_REGISTRY if spec.editable})
     panel.settings.call_async.return_value = future
     OperatorGUI.apply(panel, save=True)
     assert not (tmp_path/'operator_settings.json').exists()
@@ -80,7 +88,7 @@ def test_save_failure_is_distinguished_from_runtime_apply_failure(tmp_path, monk
     def fail(*args): raise OSError('Disk full')
     monkeypatch.setattr('ur_vr_teleop.gui.save_settings', fail)
     OperatorGUI.complete_settings(panel, future, SimpleNamespace(successful=True))
-    assert 'applied but NOT saved' in panel.message.set.call_args.args[0]
+    assert 'applied but not saved' in panel.message.set.call_args.args[0]
 
 
 def test_damping_saves_and_old_profiles_remain_loadable(tmp_path):

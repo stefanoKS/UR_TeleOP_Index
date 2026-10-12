@@ -29,7 +29,8 @@ def panel():
     return SimpleNamespace(last_status_at=time.monotonic(), last_status={
         'mode': 'LIVE OUTPUT', 'armed': False, 'a_held': False, 'enable_requested': False,
         'observations_healthy': True, 'stationary': True, 'robot_ready': True, 'controller_ready': False},
-        message=Mock(), switch_client=Mock(), pending=[], call=Mock())
+        message=Mock(), switch_client=Mock(), pending=[], call=Mock(),
+        stale=lambda: False)
 
 
 @pytest.mark.parametrize('key,value', [('armed', True), ('a_held', True), ('enable_requested', True),
@@ -43,7 +44,7 @@ def test_prepare_never_activates_when_preconditions_fail(key, value):
 
 def test_stale_status_prevents_preparation():
     p = panel()
-    p.last_status_at -= 2.
+    p.stale = lambda: True
     OperatorGUI.prepare_controller(p)
     p.switch_client.call_async.assert_not_called()
 

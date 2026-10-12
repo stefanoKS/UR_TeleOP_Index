@@ -11,7 +11,7 @@ The current implementation supports **either one or two calibrated Lighthouse st
 - Translation and rotation mapping, pose filters, spatial deadbands, configurable speed and acceleration limits.
 - Hold A to command; release to stop. Tracking faults invalidate the clutch and require release and a new press.
 - MoveIt Servo, collision/singularity monitoring, and a custom Ruckig controller upstream of the UR driver's position interface.
-- Persistent operator tuning, session diagnostics, RViz, and an optional D405 wrist-camera display.
+- A single-window operator dashboard with persistent tuning, session diagnostics, RViz, and an optional D405 wrist-camera display.
 - Driver-connected Preview and a separate hardware-free mock simulator. These exercise different control paths.
 
 **Review active settings before commissioning.** The committed YAML specifies 0.10 m/s linear speed; the committed saved operator profile overrides it to **1.5 m/s**. Angular speed is similarly overridden from 30 to **180 deg/s**, joint speed from 0.5 to **2 rad/s**, and alignment yaw from −90° to **−40°**. These are existing settings, not recommended starting limits. See [configuration precedence](docs/CONFIGURATION.md#configuration-precedence).
@@ -65,7 +65,7 @@ After installation, use the existing **UR10e Teleop** desktop shortcut, if insta
 
 1. The managed desktop starts **Preview** by default. It connects the driver and starts tracking, but the teleop node cannot publish robot motion commands. This is not hardware-free simulation.
 2. With A released and motion controllers inactive, check pose freshness, optical tracking, measured joints, `tool0`, and all three mapped movement directions. Complete [commissioning](docs/COMMISSIONING.md) before live operation.
-3. Select position or velocity mode and review effective limits. Apply changes while disarmed with A released. Joint-speed changes require a stack restart.
+3. Select position or velocity mode and review effective limits in Quick tuning; advanced settings remain in the same window. Apply changes while disarmed with A released. Joint-speed changes require a stack restart.
 4. For an authorized physical session, select **Live setup**. Run the prepared External Control program on the pendant. Use **Start Servo solver** and **Prepare controller** as indicated by the panel, then complete the session confirmations.
 5. Select **Enable teleop** only when readiness checks pass. Release A, then press and hold it to establish a new reference and command motion.
 6. Release A for a normal stop; use **DISARM TELEOP** to clear enable intent. Use the pendant emergency stop for an emergency. **Stop ROS** shuts down the managed stack; close the desktop afterward.

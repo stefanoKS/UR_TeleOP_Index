@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import tempfile
 import yaml
+from dataclasses import dataclass
+from typing import Optional
 
 
 DEFAULTS = {
@@ -24,6 +26,108 @@ DEFAULTS = {
     'single_station_motion_scale': 1.  # Legacy saved field; ignored by the motion gate,
 }
 FIELD_PARAMETERS = list(DEFAULTS)
+
+
+@dataclass(frozen=True)
+class ParameterSpec:
+    """One editable operator setting and its dashboard presentation.
+
+    Stored values deliberately keep the existing ROS/configuration units.  The
+    display conversion is owned here so the GUI never has to infer it from a
+    widget position.
+    """
+    key: str
+    label: str
+    help: str
+    units: str
+    category: str
+    mode: Optional[str] = None
+    editable: bool = True
+    requires_restart: bool = False
+    operator_visible: bool = False
+    display_multiplier: float = 1.
+    display_inverse: bool = False
+    choices: tuple = ()
+
+
+PARAMETER_REGISTRY = (
+    ParameterSpec('teleop_control_mode', 'Teleoperation mode',
+                  'Velocity maps hand speed; Position follows a clutch-relative target.', '', 'quick',
+                  choices=('velocity', 'position'), operator_visible=True),
+    ParameterSpec('translation_scale', 'Translation ratio (VR:robot)',
+                  '1.2 means 12 cm of hand movement requests 10 cm at the robot.', ':1', 'quick',
+                  operator_visible=True, display_inverse=True),
+    ParameterSpec('rotation_scale', 'Rotation ratio (VR:robot)',
+                  'Ratio of controller rotation to requested robot rotation.', ':1', 'quick',
+                  operator_visible=True, display_inverse=True),
+    ParameterSpec('max_linear_speed_m_s', 'Maximum TCP linear speed',
+                  'Cartesian limit upstream of Servo.', 'm/s', 'quick', operator_visible=True),
+    ParameterSpec('max_angular_speed_deg_s', 'Maximum TCP angular speed',
+                  'Cartesian angular limit upstream of Servo.', 'deg/s', 'quick', operator_visible=True),
+    ParameterSpec('max_linear_acceleration_m_s2', 'Linear acceleration',
+                  'Cartesian demand ramp limit.', 'm/s²', 'motion'),
+    ParameterSpec('max_angular_acceleration_rad_s2', 'Angular acceleration',
+                  'Cartesian demand ramp limit.', 'rad/s²', 'motion'),
+    ParameterSpec('max_joint_speed_rad_s', 'Maximum joint speed',
+                  'Final controller startup limit; save then restart ROS to take effect.', 'rad/s', 'motion',
+                  requires_restart=True),
+    ParameterSpec('joint_acceleration_warning_rad_s2', 'Joint acceleration warning',
+                  'Observational diagnostic threshold; not an actuator limit.', 'rad/s²', 'motion'),
+    ParameterSpec('vr_translation_deadband_m', 'Translation deadband',
+                  'Small tracking motion to ignore.', 'mm', 'tracking', display_multiplier=1000.),
+    ParameterSpec('vr_rotation_deadband_deg', 'Rotation deadband',
+                  'Small tracking rotation to ignore.', 'deg', 'tracking'),
+    ParameterSpec('vr_translation_filter_alpha', 'Translation filter alpha',
+                  'Lower values are smoother; 1 disables this filter.', '', 'tracking'),
+    ParameterSpec('vr_rotation_filter_alpha', 'Rotation filter alpha',
+                  'Lower values are smoother; 1 disables this filter.', '', 'tracking'),
+    ParameterSpec('linear_velocity_filter_s', 'Linear velocity filter',
+                  'Velocity-mode smoothing time constant.', 'ms', 'tracking', display_multiplier=1000., mode='velocity'),
+    ParameterSpec('angular_velocity_filter_s', 'Angular velocity filter',
+                  'Velocity-mode angular smoothing time constant.', 'ms', 'tracking', display_multiplier=1000., mode='velocity'),
+    ParameterSpec('tracking_gain_s_inv', 'Tracking response gain',
+                  'Position-mode pose-error response.', '1/s', 'position', mode='position'),
+    ParameterSpec('translation_damping_gain', 'Translation damping',
+                  'Position-mode measured-tool velocity feedback.', '', 'position', mode='position'),
+    ParameterSpec('rotation_damping_gain', 'Rotation damping',
+                  'Position-mode measured-tool angular-velocity feedback.', '', 'position', mode='position'),
+    ParameterSpec('damping_velocity_filter_s', 'Damping velocity filter',
+                  'Position-mode measured velocity smoothing.', 'ms', 'position', mode='position', display_multiplier=1000.),
+    ParameterSpec('tracking_to_robot_rpy_deg', 'Tracking-to-robot alignment RPY',
+                  'Engineering calibration mapping. Changing it invalidates alignment verification.', 'deg', 'engineering'),
+    # Compatibility fields are retained for old saved profiles but deliberately
+    # not exposed as editable operator controls.
+    ParameterSpec('tracking_station_policy', 'Tracking station policy',
+                  'Compatibility alias; any_station is the supported policy.', '', 'compatibility', editable=False,
+                  choices=('any_station', 'two_station_strict', 'single_station_experimental')),
+    ParameterSpec('single_station_motion_scale', 'Single-station motion scale',
+                  'Legacy saved field; ignored by the motion gate.', '', 'compatibility', editable=False),
+)
+PARAMETERS_BY_KEY = {spec.key: spec for spec in PARAMETER_REGISTRY}
+assert set(PARAMETERS_BY_KEY) == set(DEFAULTS), 'Registry must cover every saved parameter'
+
+
+def display_value(spec, value):
+    """Convert one persisted value into the unit shown by the dashboard."""
+    if spec.display_inverse:
+        return 1. / value
+    if isinstance(value, list):
+        return ', '.join(f'{item:g}' for item in value)
+    return value * spec.display_multiplier if isinstance(value, (int, float)) else value
+
+
+def stored_value(spec, text):
+    """Parse one dashboard value into the compatible persisted/ROS value."""
+    if spec.key == 'tracking_to_robot_rpy_deg':
+        return [float(item.strip()) for item in str(text).split(',')]
+    if spec.choices:
+        return str(text)
+    value = float(text)
+    if spec.display_inverse:
+        if value <= 0:
+            raise ValueError(spec.label + ' must be positive')
+        return 1. / value
+    return value / spec.display_multiplier
 
 
 def validate(values):
