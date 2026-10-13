@@ -426,6 +426,8 @@ class OperatorGUI:
             self.heartbeat_allowed=True
 
     def stop_teleop(self):
+        if getattr(self, 'setup_wizard', None) is not None:
+            self.setup_wizard.cancel_capture()
         self.startup.stop()
         # A canceled Future cannot cancel a request already executing at the server.
         # Withhold heartbeat until it retires, then send disarm again.

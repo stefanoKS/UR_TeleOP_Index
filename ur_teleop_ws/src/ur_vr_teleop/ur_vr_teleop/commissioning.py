@@ -5,6 +5,7 @@ No driver start, program start, controller switch, reset or fault clearing here.
 """
 import json
 import math
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -633,6 +634,9 @@ class Commissioning(Preview):
             'engineering_reason': self.engineering_status_reason(),
             'setup_feedback_fresh': bool(self.setup_tf_fresh and self.joints_ok and
                 fresh(*self.records.get('joints', (-1e30, 0)), time.monotonic(), now.nanoseconds, self.observation_timeout)),
+            'managed_session_id': os.environ.get('UR_TELEOP_MANAGED_SESSION', ''),
+            'motion_output_enabled': self.motion_output,
+            'command_publisher_present': self.command_pub is not None,
             'setup_checked': math.isfinite(self.engineering_checked),
             'setup_context': self.get_parameter('engineering_context').value,
             'setup_technical': self.engineering.technical if self.engineering else '',

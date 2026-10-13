@@ -246,7 +246,59 @@ def run():
             assert stops[0].winfo_rooty()+stops[0].winfo_height() <= wizard.window.winfo_rooty()+680
             x,y=wizard.window.winfo_rootx(),wizard.window.winfo_rooty()
             ImageGrab.grab(bbox=(x,y,x+1000,y+680)).save(output/('setup-'+name+'.png'))
+        # Feed genuine synthetic multi-sample measurements into the Tk-only adapter.
+        # The real observer remains isolated and cannot activate a command path.
+        from test_calibration_capture import Stream
+        from ur_vr_teleop.calibration_capture import STEPS
+        import numpy as np
+        synthetic=Stream()
+        wizard.baseline={}
+        wizard.baseline_parameters=status()['effective_parameters']
+        panel=wizard.calibration_panel
+        for i in range(6):
+            axis=np.eye(3)[i%3]
+            synthetic.capture(i,delta=axis*.04 if i<3 else None,angle=axis*.3 if i>=3 else None)
+            synthetic.run(.7)
+            snapshot=synthetic.c.snapshot()
+            snapshot.update(session_id=gui.session,parameters=wizard.baseline_parameters)
+            panel.update(snapshot)
+        assert len(wizard.checks.results)==6
+        assert not any(r['physical_pass'] for r in wizard.checks.results.values())
+        assert panel.notebook.index(panel.notebook.select())==1
+        assert all(panel.table.item(name,'values')[-1]=='Pass' for name in STEPS)
+        panel.review()
+        assert all(wizard.checks.results[name]['physical_pass'] for name in STEPS)
+        assert not wizard.preview_complete()  # Separate optical and Live tests remain required.
+        panel.cannot_identify()
+        assert not any(wizard.checks.results[name]['physical_pass'] for name in STEPS)
+        panel.review()  # A subsequent explicit review is still required.
+        wizard.save()
+        assert not (gui.config_path.parent/'verified_setup.json').exists()
+        wizard.tabs.select(0)
+        wizard.message.set('Synthetic capture demonstration — physical commissioning remains required.')
+        review_snapshot=snapshot
+        in_progress=Stream();in_progress.held=True;in_progress.run(.4);in_progress.move([.04,0,0])
+        guided_snapshot=in_progress.c.snapshot()
+        guided_snapshot.update(session_id=gui.session,parameters=wizard.baseline_parameters)
+        for width,height in ((1000,680),(900,650)):
+            wizard.window.geometry(f'{width}x{height}+50+50')
+            for tab,label in ((0,'guided'),(1,'review'),(2,'optical')):
+                panel.update(guided_snapshot if tab==0 else review_snapshot)
+                panel.notebook.select(tab);wizard.window.lift();pump(.2)
+                assert stops[0].winfo_rooty()+stops[0].winfo_height() <= wizard.window.winfo_rooty()+height
+                x,y=wizard.window.winfo_rootx(),wizard.window.winfo_rooty()
+                ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'calibration-{label}-{width}x{height}.png')
+        panel.table.selection_set('mapping_x');panel.retry_selected()
+        assert 'mapping_x' not in wizard.checks.results
+        assert not any(r['physical_pass'] for r in wizard.checks.results.values())
+        gui.stop_teleop();assert not wizard.capture_enabled
+        assert panel.snapshot['state']=='CANCELLED'
+        old_observer=wizard.observer
         wizard.close();pump(.2)
+        assert not old_observer.thread.is_alive()
+        gui.open_setup();new_observer=gui.setup_wizard.observer
+        assert new_observer is not old_observer
+        gui.setup_wizard.close();assert not new_observer.thread.is_alive()
         assert gui.setup_wizard is None  # Closing does not reopen on every status tick.
         # Close cancels futures and prevents late widget callbacks.
         pending=Future();gui.track_request('servo',pending)

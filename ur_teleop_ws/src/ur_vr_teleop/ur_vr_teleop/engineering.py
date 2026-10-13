@@ -49,7 +49,9 @@ def identity(settings, root, tracking):
         paths += [p for p in (root/'ur_teleop_ws/src'/name).rglob('*')
                   if p.suffix in ('.cpp', '.hpp', '.yaml') and 'test' not in p.parts]
     # Required files fail closed. Tests construct an explicit miniature installation.
+    compatibility = json.loads(Path(__file__).with_name('setup_source_compatibility.json').read_text())
     software = {str(p.relative_to(root)): digest(p) for p in sorted(set(paths))}
+    software = {name: compatibility.get(name, {}).get(value, value) for name, value in software.items()}
     return dict(version=VERSION, installation=str(root), host=digest('/etc/machine-id'),
                 robot=robot, teleop=teleop, tracking_sha256=digest(tracking),
                 controller_serial='LHR-4632363E', software=software, motion_packages=motion_packages())

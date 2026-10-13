@@ -1,0 +1,100 @@
+{
+  "synthetic_only": true,
+  "quality": {
+    "observer_version": "5.1",
+    "step": "mapping_x",
+    "passed": true,
+    "failure_reasons": [],
+    "warnings": [],
+    "start_position": [
+      -1.2577162897982453e-06,
+      0.0,
+      0.0
+    ],
+    "end_position": [
+      0.04999719130791144,
+      0.0,
+      0.0
+    ],
+    "start_quaternion": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "end_quaternion": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "mapped_translation_m": [
+      0.04999844902420124,
+      0.0,
+      0.0
+    ],
+    "mapped_rotation_rad": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "mapped_vector": [
+      0.04999844902420124,
+      0.0,
+      0.0
+    ],
+    "magnitude": 0.04999844902420124,
+    "requested_axis": 0.04999844902420124,
+    "perpendicular": 0.0,
+    "dominant_axis": "X",
+    "direction_sign": "+",
+    "position_jitter_m": [
+      1.1257692063366876e-05,
+      0.0016538956146883305
+    ],
+    "orientation_jitter_rad": [
+      0.0,
+      0.0
+    ],
+    "accepted_samples": 116,
+    "duration_s": 1.148774449,
+    "receipt_duration_s": 1.1483993430010742,
+    "source_hz": 100.1066833442428,
+    "tracking_dropouts": 0,
+    "continuity": true,
+    "source_interval_ns": [
+      1791927539762421968,
+      1791927540911196417
+    ],
+    "thresholds": {
+      "stable_s": 0.25,
+      "minimum_samples": 8,
+      "position_jitter_m": 0.003,
+      "orientation_jitter_rad": 0.03490658503988659,
+      "minimum_translation_m": 0.02,
+      "minimum_rotation_rad": 0.17453292519943295,
+      "perpendicular_ratio": 0.6,
+      "pose_timeout_s": 0.15,
+      "joy_timeout_s": 0.2,
+      "flag_timeout_s": 0.2,
+      "isolation_timeout_s": 0.5,
+      "debounce_s": 0.04,
+      "release_guard_s": 0.12,
+      "maximum_capture_s": 20.0,
+      "maximum_samples": 3000,
+      "maximum_jump_m": 0.05,
+      "maximum_jump_rad": 0.7853981633974483,
+      "freeze_s": 0.5,
+      "recovery_s": 0.1,
+      "advance_s": 0.6,
+      "quaternion_norm_tolerance": 0.2,
+      "future_tolerance_s": 0.03
+    }
+  },
+  "throughput": {
+    "published_pose_samples": 138,
+    "received_pose_samples": 138,
+    "elapsed_s": 1.380476908001583,
+    "receipt_hz": 99.96545338796913
+  }
+}

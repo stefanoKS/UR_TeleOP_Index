@@ -12,6 +12,7 @@ class ManagerWorker:
         self.closing = threading.Event()
         self.action = None
         self.busy = False
+        self.calibration = (None, False)
         self.thread = threading.Thread(target=self.run, name='teleop-process-owner', daemon=False)
         self.thread.start()
 
@@ -29,7 +30,14 @@ class ManagerWorker:
         self.wake.set()
         return True
 
+    def calibration_snapshot(self):
+        with self.lock:
+            return self.calibration if not self.busy and not self.closing.is_set() else (None, False)
+
     def snapshot(self):
+        with self.lock:
+            self.calibration = (getattr(self.manager, 'token', None),
+                bool(self.manager.children) and not self.manager.live and not self.manager.stopping)
         try:
             self.events.get_nowait()
         except queue.Empty:

@@ -222,3 +222,15 @@ Use **Settings → Recalibrate / Initial Setup** to repeat verification. **Impor
 ### V4 software validation
 
 `test_startup.py` tests asynchronous stage ordering, acknowledgments/readback, idempotency, missing prerequisites, failures/timeouts, STOP races, session retirement and tracking recovery. `test_engineering.py` retains legacy evidence regression coverage; `test_setup.py` tests new local persistence, invalidation, migration and observed setup transitions using synthetic fixtures only. The isolated ROS checks ensure legacy flags cannot satisfy record-required readiness and that optical loss and mapping invalidation remain effective. `gui_render_check.py` additionally uses real ROS services with a synthetic backend to test one-button preparation, duplicate Start, STOP, and reuse of active components. Screenshots from this check are simulated telemetry, not a robot commissioning result.
+
+## V5.1 controller capture validation
+
+After rebuilding/sourcing `ur_vr_teleop`, run the additional explicit check serially with other ROS tests:
+
+```bash
+ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=147 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/calibration_ros_check.py
+```
+
+This script explicitly initializes domain 147, uses synthetic inputs and the real motion-disabled Commissioning backend, verifies actual managed Preview command generation, and writes a synthetic report under `/tmp/ur_teleop_calibration_v51`. It never launches the physical driver or enables motion. The normal pytest directories include the pure capture and persistence tests; `gui_render_check.py` additionally checks combined review, missing-check save refusal, retries, STOP, cleanup and scrollable wizard layouts. See [V5.1 validation](CALIBRATION_V51.md).
+
+Direction calibration does not resolve or validate the reported post-movement sway. Authorized supervised Live tests must separately measure actual stopping, recovery, tool/TCP/payload, alignment accuracy and tracking occlusion behavior. Do not synthesize healthy states in production or save a production setup from these automated tests.

@@ -28,6 +28,10 @@ class SetupWizard:
         self.baseline = None
         self.baseline_parameters = None
         self.closed = False
+        self.capture_enabled = False
+        self.awaiting_preview_session = None
+        from .calibration_observer import CalibrationObserver
+        self.observer = CalibrationObserver(context=gui.node.context)
         self.window = tk.Toplevel(gui.root)
         self.window.title('Initial Setup — supervised verification')
         self.window.geometry('1000x680')
@@ -48,19 +52,15 @@ class SetupWizard:
         preview, live, save = [ttk.Frame(tabs, padding=12) for _ in range(3)]
         for frame, title in ((preview, '1  Connection & mapping'), (live, '2  Supervised stop tests'), (save, '3  Save Setup')):
             tabs.add(frame, text=title)
-        ttk.Label(preview, text='Begin in Preview. The robot stays disarmed with motion controllers inactive.\nUse the robot base axes in RViz: red +X, green +Y, blue +Z. A must stay released.\nCapture a start pose, move the hand at least 2 cm along the selected positive axis, then capture the end.\nFor orientation, rotate at least 10° using the right-hand rule. Compare measured tool0 axes with the physical tool.\nIf directions disagree, adjust mapping in Advanced tuning, Apply + save, and begin Preview again.', wraplength=910).pack(anchor='w')
-        self.axes_canvas = canvas = tk.Canvas(preview, height=105, bg='white', highlightthickness=0)
+        ttk.Label(preview, text='Verify the configured robot-base mapping using known physical axes. No automatic RPY estimation.\nIf the physical axes are uncertain, stop and establish a trusted reference. Advanced tuning retains manual RPY.', wraplength=910).pack(anchor='w')
+        self.axes_canvas = canvas = tk.Canvas(preview, height=85, bg='white', highlightthickness=0)
         canvas.pack(fill='x', pady=5)
         self.telemetry = tk.StringVar(value='Measured tool TF and controller pose: waiting')
-        ttk.Label(preview, textvariable=self.telemetry, wraplength=910, font=('DejaVu Sans Mono', 9)).pack(anchor='w')
+
         ttk.Button(preview, text='Begin / restart supervised Preview', command=self.begin_preview).pack(anchor='w', pady=5)
-        self.selection = tk.StringVar(value=LABELS['mapping_x'])
-        selector = ttk.Combobox(preview, state='readonly', textvariable=self.selection, values=[LABELS[k] for k in CHECKS[:7]], width=28)
-        selector.pack(anchor='w')
-        row = ttk.Frame(preview); row.pack(fill='x', pady=5)
-        for title, action in (('Capture start / observe loss', self.begin_check), ('Capture end', self.capture),
-                              ('I physically verified this result', self.attest)):
-            ttk.Button(row, text=title, command=action).pack(side='left', padx=3)
+        self.selection = tk.StringVar(value=LABELS['preview_loss'])
+        from .calibration_panel import CalibrationPanel
+        self.calibration_panel = CalibrationPanel(preview, self)
         ttk.Label(live, text='Authorized commissioning only. Review payload, TCP, mounting, collision model, workspace and the\nACTUAL motion limits below. Select site-approved test limits in the dashboard and save/restart Preview\nbefore testing. Keep the pendant available and clear the workspace. Each test requires observed motion.\n\nAfter Preview checks: enter supervised Live, apply Preview results, then press Start supervised tests.\nSelect a test and click Observe test BEFORE holding A and moving slowly. For A stop: release A.\nFor tracking loss: keep A held while covering tracking; wait for standstill, restore tracking while held,\nthen release A and press again. Verify the actual stopping distance and recovery before accepting.\nFor software stop: while moving, press the always-available STOP TELEOP button.\nThe observer requires zero upstream demand and measured standstill for 0.5 s; this is not a stopping-distance limit.', wraplength=910).pack(anchor='w')
         row = ttk.Frame(live); row.pack(fill='x', pady=10)
         for title, action in (('Enter supervised Live', self.begin_live), ('Apply Preview results', self.apply_preview),
@@ -137,6 +137,7 @@ class SetupWizard:
                 'TCP/payload and clear workspace, with the pendant available?\n\nLive starts disarmed. '
                 'Motion still requires Start supervised tests and a fresh A press.', parent=self.window):
                 return
+            self.cancel_capture()
             self.gui.stack_action('setup_live')
         self.invoke(begin)
 
@@ -227,6 +228,20 @@ class SetupWizard:
         if self.closed:
             return
         self.checks.update(d, now)
+        if self.awaiting_preview_session is not None and d.get('session_id') != self.awaiting_preview_session:
+            self.awaiting_preview_session = None
+            self.capture_enabled = True
+
+    def cancel_capture(self):
+        self.awaiting_preview_session = None
+        self.capture_enabled = False
+        self.observer.configure(None, False)
+        self.observer.command('cancel')
+        panel = getattr(self, 'calibration_panel', None)
+        if panel and panel.snapshot:
+            panel.update(dict(panel.snapshot, state='CANCELLED',
+                reason='Capture stopped. Release A and use Retry / resume to continue.',
+                samples=0, progress=None, isolated=False))
 
     def draw_axes(self, v, d):
         canvas = self.axes_canvas
@@ -244,7 +259,7 @@ class SetupWizard:
             except (ValueError, KeyError):
                 pass
         for i, (title, matrix) in enumerate(zip(('Robot base axes', 'Measured tool axes', 'Mapped controller axes'), matrices)):
-            x, y = 140+i*300, 72
+            x, y = 140+i*300, 65
             canvas.create_text(x, 12, text=title)
             if matrix is None:
                 canvas.create_text(x, 55, text='Waiting for fresh pose / TF', fill='#64748B')
@@ -260,6 +275,16 @@ class SetupWizard:
             return
         d = self.gui.last_status
         stale = self.gui.stale()
+        token, managed_preview = self.gui.process_worker.calibration_snapshot() if self.gui.process_worker else (None, False)
+        permitted = (self.capture_enabled and managed_preview and not stale and self.baseline is not None
+            and self.baseline_parameters == d.get('effective_parameters') and not self.gui.startup.requested
+            and not self.gui.startup_request and not self.gui.pending and not self.gui.parameters.pending)
+        self.observer.configure(token, permitted)
+        snapshot = self.observer.latest()
+        if snapshot is not None and self.capture_enabled:self.calibration_panel.update(snapshot)
+        if self.observer.failure:
+            self.gui.setup_technical = self.observer.failure
+            self.message.set('Calibration observer unavailable. Close and reopen Setup; details in Advanced Diagnostics.')
         if stale:
             self.checks.cancel()
         self.status.set('Backend unavailable — checks paused' if stale else
@@ -290,6 +315,7 @@ class SetupWizard:
                 result = future.result()
                 if purpose == 'preview':
                     self.baseline = result
+                    self.awaiting_preview_session = self.gui.session
                     self.gui.stack_action('setup_preview')
                     self.message.set('Preview starting. Wait for fresh robot, VR and tool TF, then perform each check.')
                 else:
@@ -305,6 +331,7 @@ class SetupWizard:
         if self.closed:
             return
         self.closed = True
+        self.observer.close()
         if stop:
             self.gui.stop_teleop()
             # Never leave an abandoned wizard in the legacy session path.

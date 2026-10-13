@@ -238,3 +238,20 @@ See [record creation and invalidation](COMMISSIONING.md#v4-engineering-record) f
 The application generates **verified_setup.json** alongside the selected original YAML, in `ur_teleop/config` for the standard installation. Atomic owner-only saving uses a temporary file, file fsync, replace, and directory fsync. It stores installation/host, configured robot IP and calibration digest, configured VR serial and tracking digest, mapping/tool/tuning identity, control/dependency/template hashes, verified motion modes/limit envelope, observation results and the authorized physical assessment. It does not store enable intent, expiry or an external report requirement. Selected settings are saved using the existing validated preference writer; legacy session flags still reset false.
 
 `engineering_context` and `engineering_record_path` retain their names for compatibility; the legacy record path locates the adjacent new setup file. A reduced limit within the verified envelope is allowed. Raised limits, unverified modes, changed mapping/tool/calibration/tracking/tuning/control source require verification. UI styling and documentation do not. Physical mounting, TCP or station moves must be declared by reopening the wizard because files cannot detect them. No numeric defaults or committed operator overrides change in this work.
+
+## V5.1 internal capture quality thresholds
+
+`calibration_capture.CaptureConfig` is an internal, injectable immutable configuration for observational capture/tests. It adds no YAML/ROS tuning key and changes no saved preference, motion limit or filter. Stable endpoints require 250 ms and at least 8 distinct samples, with maximum positional spread 3 mm and orientation spread 2°. Required positive-axis displacement remains 20 mm / 10°; perpendicular magnitude must be at most 0.6 times the requested-axis component.
+
+| Capture guard | Default |
+|---|---|
+| Pose / Joy / validity flag freshness | 150 / 200 / 200 ms |
+| Isolation readback lifetime | 500 ms (backend status additionally <400 ms) |
+| Button debounce / release verification | 40 / 120 ms |
+| Continuous recovery / advance delay | 100 / 600 ms |
+| Maximum capture / stored samples per buffer | 20 s / 3000 |
+| Adjacent-pose jump | 50 mm / 45° |
+| Exactly frozen source pose | 500 ms |
+| Quaternion norm error / future source tolerance | 0.2 / 30 ms |
+
+These limits validate observation quality; they are not robot stopping bounds. Changing them does not tune the actuator. The engine normalizes accepted quaternions and uses quaternion-relative world rotation. Neither GUI display ratios nor stored RPY are modified. Existing saved linear speed 1.5 m/s and yaw −40° remain distinct from YAML 0.10 m/s and −90°.
