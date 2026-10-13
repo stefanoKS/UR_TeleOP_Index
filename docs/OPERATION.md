@@ -10,7 +10,7 @@ Use the workstation's **UR10e Teleop** shortcut or run:
 ~/Documents/Teleop/ur_teleop/start_teleop.sh
 ```
 
-The desktop starts **Live automatically, with motion disarmed and the scaled controller inactive**. Press START TELEOP only when the work area is ready. A matching V4 engineering record is required for routine operation. It manages the robot driver, tracking, commissioning nodes, and optional camera/RViz. Preview connects to real robot state but does not publish teleop joint commands. It expects motion controllers to remain inactive. If you need a completely hardware-free environment, use the [mock simulator](COMMISSIONING.md#automated-validation).
+The desktop starts **Live automatically, with motion disarmed and the scaled controller inactive**. Press START TELEOP only when the work area is ready. A matching saved setup is required for routine operation. On first launch, the [Initial Setup Wizard](INITIAL_SETUP.md) opens automatically after backend verification. It manages the robot driver, tracking, commissioning nodes, and optional camera/RViz. Preview connects to real robot state but does not publish teleop joint commands. It expects motion controllers to remain inactive. If you need a completely hardware-free environment, use the [mock simulator](COMMISSIONING.md#automated-validation).
 
 `start_gui.sh` opens only the operator panel for an existing stack. It does not start tracking or the driver. Avoid launching duplicate panels or bridges: duplicate command publishers and missing ownership checks can block readiness.
 
@@ -70,7 +70,7 @@ A saved joint-speed change requires restarting the ROS stack because the final n
 5. Hold A to move; release A to request a controlled stop.
 6. Press **STOP TELEOP** to clear enable intent. A new START is required afterward.
 
-A previously commissioned, unchanged installation needs no daily checkboxes or separate Servo/controller buttons. `ENGINEERING SETUP REQUIRED` means the record is missing, expired, changed, or outside its approved tuning envelope. Do not invent confirmations to clear it. Effective TCP speed caps and the active final joint limit remain visible even while editing drafts. Saved high limits are not evidence of approval.
+A previously commissioned, unchanged installation needs no daily checkboxes or separate Servo/controller buttons. “Open Setup Wizard” means setup is missing, damaged, changed, or outside its verified tuning envelope. Do not invent confirmations to clear it. Effective TCP speed caps and the active final joint limit remain visible even while editing drafts. Saved high limits are not evidence of approval.
 
 Missing hardware prerequisites wait without repeated clicks. Failed services show the failing stage and require a controlled START retry after correction. An **enable service timeout with unknown outcome requires Restart ROS**: local cancellation cannot undo a request already received by the server. STOP remains available; the GUI withholds its heartbeat to prevent a delayed enable from restoring motion permission.
 
@@ -115,7 +115,7 @@ not submit changes or alter session checkboxes. Restore Defaults only stages
 editable defaults; hidden compatibility settings remain intact. A mapping edit
 clears the local alignment checkbox so an old check cannot approve a new mapping.
 
-In explicit supervised engineering sessions, legacy checkboxes express draft intent. Routine Live uses the V4 engineering record. The checklist uses backend confirmation;
+In explicit supervised engineering sessions, legacy checkboxes express draft intent. Routine Live uses the locally saved verified setup. The checklist uses backend confirmation;
 checking a box alone shows **Pending application**, not **Verified**. Backend
 mapping invalidation revokes verification. Restart clears local session checks;
 stale status shows **Unknown / status unavailable**.
@@ -135,4 +135,6 @@ all current blockers. Long process messages are available there in full.
 
 Engineering Preview is available under **Engineering / diagnostics** or with `start_teleop.sh --preview`; the separate domain-42 simulator remains hardware-free. The technical panel is intended for authorized engineers, and its manual Enable is disabled during routine V4 Live operation.
 
-To temporarily use the previous supervised workflow, stop the owned stack and close the app, then run `ur_teleop/start_teleop.sh --preview --engineering-session`. Under Engineering, select Live, perform the documented mapping and optical-loss checks, apply the session confirmations, prepare the controller, start Servo, and use **Enable (supervised commissioning)**. This explicit mode uses the original session checks; it does not fabricate a V4 record or clear robot protections. Return to the normal launcher to restore record-based startup.
+To temporarily use the previous supervised workflow, stop the owned stack and close the app, then run `ur_teleop/start_teleop.sh --preview --engineering-session`. Under Engineering, select Live, perform the documented mapping and optical-loss checks, apply the session confirmations, prepare the controller, start Servo, and use **Enable (supervised commissioning)**. This explicit mode uses the original session checks; it does not fabricate a V4 record or clear robot protections. Return to the normal launcher to restore saved-setup startup.
+
+Normal setup uses **Settings → Recalibrate / Initial Setup**; see the [wizard guide](INITIAL_SETUP.md). The legacy expert commands above remain available for debugging.

@@ -209,6 +209,45 @@ def run():
             ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'dashboard-{width}x{height}-advanced.png')
             gui.advanced_open.set(False);gui.toggle_advanced();pump(.1)
             ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'dashboard-{width}x{height}.png')
+        # First-launch setup opens only after backend verification has completed.
+        assert gui.setup_wizard is None
+        previous_status = status
+        setup_state = dict(engineering_required=True, engineering_verified=True,
+                           setup_checked=True, setup_context='{}', setup_feedback_fresh=True,
+                           base_frame='base_link', tool_frame='tool0',
+                           velocity_diagnostics=dict(previous_status()['velocity_diagnostics'],
+                               raw_pose=[.1,.2,1.,0.,0.,0.,1.], measured_tcp_position=[.4,.1,.5],
+                               measured_tcp_orientation=[0.,0.,0.,1.]))
+        def status():
+            return dict(previous_status(), **setup_state)
+        pump(.3)
+        assert gui.setup_wizard is None
+        setup_state.update(engineering_verified=False, setup_checked=False)
+        pump(.3)
+        assert gui.setup_wizard is None
+        setup_state['setup_checked'] = True
+        pump(.3)
+        assert gui.setup_wizard is not None
+        wizard = gui.setup_wizard
+        assert not wizard.checks.results
+        wizard.save()
+        assert not (gui.config_path.parent/'verified_setup.json').exists()
+        # Actual Tk windows, synthetic telemetry, no automatic physical checks.
+        for index, name in enumerate(('connection-mapping', 'supervised-stops', 'save-setup')):
+            wizard.tabs.select(index)
+            wizard.window.geometry('1000x680+50+50')
+            wizard.window.lift();pump(.2)
+            def children(widget):
+                for child in widget.winfo_children():
+                    yield child
+                    yield from children(child)
+            stops=[w for w in children(wizard.window) if w.winfo_class()=='TButton' and w.cget('text')=='STOP TELEOP']
+            assert len(stops)==1 and stops[0].winfo_viewable()
+            assert stops[0].winfo_rooty()+stops[0].winfo_height() <= wizard.window.winfo_rooty()+680
+            x,y=wizard.window.winfo_rootx(),wizard.window.winfo_rooty()
+            ImageGrab.grab(bbox=(x,y,x+1000,y+680)).save(output/('setup-'+name+'.png'))
+        wizard.close();pump(.2)
+        assert gui.setup_wizard is None  # Closing does not reopen on every status tick.
         # Close cancels futures and prevents late widget callbacks.
         pending=Future();gui.track_request('servo',pending)
         gui.close();assert pending.cancelled()

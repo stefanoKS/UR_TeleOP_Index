@@ -10,7 +10,7 @@ This reference covers application parameters, managed launch settings, and proje
 4. The desktop writes a session `effective_config.yaml` with `effective_sources`. Loading this snapshot does not reread the adjacent preference file. Driver generation and commissioning use the same snapshot.
 5. Accepted atomic GUI updates can change runtime teleop parameters. Startup-only native limits still require restarting the stack. Saving follows backend acceptance; a newly saved joint-speed request is retained for restart while the running value remains unchanged.
 
-`alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. These are legacy supervised engineering-session checks; routine V4 Live uses the engineering record instead. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
+`alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. These are legacy supervised engineering-session checks; routine Live uses the verified setup instead. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
 
 Inspect the panel, `/vr_real/operator_status`, ROS parameters, and session `effective_settings.log`. A snapshot records startup, not every subsequent runtime update. `preferences.py` is authoritative for saved-key validation; `commissioning.py` validates runtime updates.
 
@@ -231,3 +231,10 @@ No operator preference schema or numeric default changed. Desktop defaults to Li
 Read-only backend `engineering_required` is true for normal Live launch and false for Preview/explicit engineering sessions. Read-only `engineering_context` carries the original effective settings and installation, record and tracking-calibration paths as JSON. The effective snapshot adds top-level `engineering_installation` and `engineering_record_path`; neither is a saved tuning key or motion authorization. Legacy confirmation parameters cannot replace a missing record in normal Live.
 
 See [record creation and invalidation](COMMISSIONING.md#v4-engineering-record) for the exact identity/envelope and engineering trust boundary. For separate low-speed profiles outside the repository, installation discovery falls back to the active package location; the record stays beside that profile. Its installation must match the `--root` used to issue the record. Do not create or copy an attestation to avoid genuine commissioning.
+
+
+### Wizard setup persistence (schema 5)
+
+The application generates **verified_setup.json** alongside the selected original YAML, in `ur_teleop/config` for the standard installation. Atomic owner-only saving uses a temporary file, file fsync, replace, and directory fsync. It stores installation/host, configured robot IP and calibration digest, configured VR serial and tracking digest, mapping/tool/tuning identity, control/dependency/template hashes, verified motion modes/limit envelope, observation results and the authorized physical assessment. It does not store enable intent, expiry or an external report requirement. Selected settings are saved using the existing validated preference writer; legacy session flags still reset false.
+
+`engineering_context` and `engineering_record_path` retain their names for compatibility; the legacy record path locates the adjacent new setup file. A reduced limit within the verified envelope is allowed. Raised limits, unverified modes, changed mapping/tool/calibration/tracking/tuning/control source require verification. UI styling and documentation do not. Physical mounting, TCP or station moves must be declared by reopening the wizard because files cannot detect them. No numeric defaults or committed operator overrides change in this work.

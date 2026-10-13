@@ -194,6 +194,8 @@ class Preview(Node):
             self.diagnostic_feedback = current
         else:
             self.diagnostic_feedback = self.measured_tcp_velocity = None
+        self.setup_tf_fresh = bool(tf_ok)
+        self.measured_tcp_q = list(tcp_q)
         self.measured_tcp = tcp
         text = getattr(self, 'mode_label', 'PREVIEW ONLY') + ' / ' + self.core.state + ' / ' + self.core.reason
         if not healthy:

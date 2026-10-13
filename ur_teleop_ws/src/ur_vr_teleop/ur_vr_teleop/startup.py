@@ -17,10 +17,11 @@ class Startup:
         self.enabled = False
         self.seen_status = False
 
-    def start(self, session):
+    def start(self, session, supervised=False):
         if self.requested or self.pending:
             return False
         self.session = session
+        self.supervised = supervised
         self.completed.clear()
         self.enabled = False
         self.seen_status = False
@@ -104,7 +105,9 @@ class Startup:
         if d.get('a_held') is not False:
             self.wait('WAITING_FOR_READINESS', 'Release A before startup')
             return None
-        if d.get('engineering_verified') is not True:
+        supervised_ready = (getattr(self, 'supervised', False) and d.get('engineering_required') is False
+                            and d.get('alignment_verified') is True and d.get('optical_loss_test_verified') is True)
+        if d.get('engineering_verified') is not True and not supervised_ready:
             self.wait('WAITING_FOR_READINESS', d.get('engineering_reason', 'ENGINEERING SETUP REQUIRED'))
             return None
         if d.get('robot_preparation_ready') is not True:

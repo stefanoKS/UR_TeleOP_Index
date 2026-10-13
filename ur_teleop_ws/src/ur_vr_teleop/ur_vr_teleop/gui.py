@@ -47,6 +47,9 @@ class OperatorGUI:
         self.confirmation_pending = None
         self.settings_result = ''
         self.process_worker = None
+        self.setup_wizard = None
+        self.setup_prompted = False
+        self.setup_technical = ''
         try:
             saved = json.loads(preference_path(self.config_path).read_text())
             if saved.get('version') == 1:
@@ -80,6 +83,11 @@ class OperatorGUI:
         f = ttk.Frame(parent, style='Card.TFrame', padding=7); ttk.Label(f, text=title, style='Section.TLabel').pack(anchor='w', pady=(0, 7)); return f
 
     def _build(self):
+        menu = tk.Menu(self.root)
+        settings_menu = tk.Menu(menu, tearoff=False)
+        settings_menu.add_command(label='Recalibrate / Initial Setup', command=self.open_setup)
+        menu.add_cascade(label='Settings', menu=settings_menu)
+        self.root.configure(menu=menu)
         self.root.grid_rowconfigure(1, weight=1); self.root.grid_columnconfigure(0, weight=1)
         header = tk.Frame(self.root, bg=COLORS['navy'], height=64); header.grid(row=0, column=0, sticky='ew'); header.grid_propagate(False); header.grid_columnconfigure(1, weight=1)
         tk.Label(header, text='UR10e TELEOPERATION', bg=COLORS['navy'], fg='white', font=('DejaVu Sans', 19, 'bold')).grid(row=0, column=0, padx=20, pady=12)
@@ -119,7 +127,7 @@ class OperatorGUI:
         ttk.Checkbutton(outer,text='Engineering / diagnostics',variable=self.engineering_open,
                         command=self.toggle_engineering).pack(anchor='w')
         self.engineering_panel=self.card(outer,'Engineering tools')
-        ttk.Label(self.engineering_panel,text='Authorized commissioning personnel only. Live requires a matching evidence record.',style='Muted.TLabel',wraplength=270).pack(anchor='w')
+        ttk.Label(self.engineering_panel,text='Authorized commissioning personnel only. Live requires a verified setup.',style='Muted.TLabel',wraplength=270).pack(anchor='w')
         buttons=ttk.Frame(self.engineering_panel,style='Card.TFrame');buttons.pack(fill='x')
         buttons.columnconfigure((0,1),weight=1)
         for i,(label,action,mode) in enumerate([('Preview','start',False),('Live stack','start',True),('Restart ROS','restart',None),('Stop ROS','stop',None)]):
@@ -255,6 +263,13 @@ class OperatorGUI:
                 var.set(False)
         self.last_status,self.last_status_at=value,time.monotonic()
         self.load_running(value)
+        if self.setup_wizard is not None:
+            self.setup_wizard.observe(value, self.last_status_at)
+        if (not self.setup_prompted and value.get('engineering_required') is True
+                and value.get('engineering_verified') is False and value.get('setup_checked') is True
+                and value.get('setup_context')):
+            self.setup_prompted = True
+            self.open_setup()
         if self.confirmation_pending is not None:
             if all(boolean(value,k)==v for k,v in self.confirmation_pending.items()):
                 self.confirmation_pending=None
@@ -332,7 +347,8 @@ class OperatorGUI:
 
     def show_history(self):
         window=tk.Toplevel(self.root)
-        window.title('Recent operator actions (last 40)')
+        window.title('Advanced diagnostics / recent operator actions')
+        ttk.Label(window, text=str(self.last_status.get('setup_technical', ''))+'\n'+self.setup_technical, wraplength=850).pack()
         text=tk.Text(window,width=100,height=20,wrap='word')
         text.pack(fill='both',expand=True)
         text.insert('end','Backend status:\n'+json.dumps(self.last_status,indent=2)+'\n\nCurrent blockers:\n'+str(self.last_status.get('blockers','Unavailable'))+'\n\nRecent actions:\n'+'\n'.join(self.notifications.history))
@@ -390,14 +406,23 @@ class OperatorGUI:
         except Exception as error:
             self.notify(f'{name}: {error}',True)
 
-    def start_teleop(self):
+    def open_setup(self):
+        from .setup_wizard import SetupWizard
+        self.setup_prompted = True
+        if self.setup_wizard is None:
+            self.stop_teleop()
+            self.setup_wizard = SetupWizard(self)
+        else:
+            self.setup_wizard.window.lift()
+
+    def start_teleop(self, supervised=False):
         if self.retiring_startup or self.startup_request or self.uncertain_enable_session == self.session and self.session is not None:
             self.notify('Waiting for canceled startup to retire. An enable timeout requires Restart ROS.',True)
             return
         if self.pending or self.parameters.pending:
             self.notify('Wait for the current engineering/settings request to finish.',True)
             return
-        if self.startup.start(self.session):
+        if self.startup.start(self.session, supervised=supervised):
             self.heartbeat_allowed=True
 
     def stop_teleop(self):
@@ -671,6 +696,8 @@ class OperatorGUI:
         self.finish_requests()
         self.check_readback(now)
         self.poll_startup(now)
+        if self.setup_wizard is not None:
+            self.setup_wizard.poll()
         self.camera_status.set(self.camera_text if now-self.camera_at<4 else 'D405 unavailable / no recent status (teleop unaffected)')
         stale,d=self.stale(),self.last_status
         self.update_dashboard(stale,d)
@@ -700,6 +727,7 @@ class OperatorGUI:
         if self.closed:return
         self.closed=True
         try:
+            if getattr(self,'setup_wizard',None) is not None:self.setup_wizard.close(stop=False)
             if getattr(self,'startup',None):self.startup.stop()
             if getattr(self,'startup_request',None):
                 _,future,client,_,_=self.startup_request

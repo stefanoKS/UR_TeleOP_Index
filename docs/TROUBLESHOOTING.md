@@ -100,7 +100,7 @@ its unknown-state behavior.
 
 | Display | Action |
 |---|---|
-| ENGINEERING SETUP REQUIRED | Authorized engineer checks missing/expired record, calibration/software/mapping identity and approved limits; follow [commissioning](COMMISSIONING.md#v4-engineering-record), never tick a daily bypass |
+| Initial setup required / Open Setup Wizard | Open Settings → Recalibrate / Initial Setup. Missing, corrupt or changed setup blocks routine motion. Advanced Diagnostics shows the underlying exception. Follow the [wizard guide](INITIAL_SETUP.md); no manual JSON or expiry management is needed. |
 | Waiting for External Control | Start the correct program on the pendant; application never issues Play |
 | Robot safety state / FAULT | Inspect pendant and follow site recovery; no automatic fault reset/protective-stop release |
 | Waiting for valid VR tracking | Inspect valid 6-DoF pose/continuity and TF/joints in Advanced diagnostics; one calibrated station is sufficient, but optical signal alone is not |

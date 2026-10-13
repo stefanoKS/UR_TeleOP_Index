@@ -100,7 +100,7 @@ class Commissioning(Preview):
         self.engineering_checked = -float('inf')
         self.engineering_parameters = None
         self.engineering_valid = False
-        self.engineering_reason = 'ENGINEERING SETUP REQUIRED: no current evidence'
+        self.engineering_reason = 'Initial setup has not been completed. Open Setup Wizard.'
         self.controller_preparation_allowed = False
         self.configure()
         self.add_on_set_parameters_callback(self.on_settings)
@@ -462,7 +462,8 @@ class Commissioning(Preview):
                 self.engineering_checked = now
             except Exception as error:
                 self.engineering_valid = False
-                self.engineering_reason = 'ENGINEERING SETUP REQUIRED: ' + str(error)
+                self.engineering_reason = 'Saved setup could not be checked. Open Advanced Diagnostics.'
+                self.get_logger().error('Setup verification: ' + repr(error))
             self.engineering_future = None
         if self.engineering_future is None and now-self.engineering_checked >= .5:
             self.engineering_submitted = self.engineering_values()
@@ -470,7 +471,7 @@ class Commissioning(Preview):
 
     def engineering_status_reason(self):
         if self.engineering_valid and not self.engineering_ready():
-            return 'ENGINEERING SETUP REQUIRED: effective tuning changed or evidence stale'
+            return 'Setup needs checking after a configuration change. Open Setup Wizard if this persists.'
         return self.engineering_reason
 
     def engineering_controller_matches(self):
@@ -630,6 +631,13 @@ class Commissioning(Preview):
             'robot_fault': self.safety_mode is not None and self.safety_mode not in (1, 2),
             'engineering_verified': self.engineering_ready() if self.engineering_required else False,
             'engineering_reason': self.engineering_status_reason(),
+            'setup_feedback_fresh': bool(self.setup_tf_fresh and self.joints_ok and
+                fresh(*self.records.get('joints', (-1e30, 0)), time.monotonic(), now.nanoseconds, self.observation_timeout)),
+            'setup_checked': math.isfinite(self.engineering_checked),
+            'setup_context': self.get_parameter('engineering_context').value,
+            'setup_technical': self.engineering.technical if self.engineering else '',
+            'setup_controllers_inactive': not self.motion_output and self.controller_ok,
+            'tool_frame': self.tool, 'base_frame': self.base,
             'tracking_valid': self.tracking_valid(),
             'robot_preparation_ready': not self.robot_preparation_reason(),
             'robot_preparation_reason': self.robot_preparation_reason(),
@@ -661,6 +669,7 @@ class Commissioning(Preview):
                 'sample_dt_s': self.core.sample_dt if self.core.control_mode == 'velocity' else self.observed_sample_dt,
                 'observed_hand_velocity': np.r_[self.core.rotation @ self.observed_hand_velocity[:3], self.core.rotation @ self.observed_hand_velocity[3:]].tolist(),
                 'measured_tcp_position': self.measured_tcp.tolist(),
+                'measured_tcp_orientation': self.measured_tcp_q,
                 'filtered_pose_frame': self.base if self.core.control_mode == 'velocity' else 'lighthouse',
                 'raw_hand_velocity': self.core.raw_hand_velocity.tolist() if self.core.control_mode == 'velocity' else np.r_[self.core.rotation @ self.raw_observed_hand_velocity[:3], self.core.rotation @ self.raw_observed_hand_velocity[3:]].tolist(),
                 'filtered_hand_velocity': self.core.hand_velocity.tolist() if self.core.control_mode == 'velocity' else np.r_[self.core.rotation @ self.observed_hand_velocity[:3], self.core.rotation @ self.observed_hand_velocity[3:]].tolist(),

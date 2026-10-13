@@ -855,7 +855,7 @@ def test_v4_live_record_is_required_even_with_legacy_flags(node):
     assert node.get_parameter('alignment_verified').value
     assert node.get_parameter('optical_loss_test_verified').value
     assert not node.arm(Trigger.Request(), Trigger.Response()).success
-    assert any('ENGINEERING SETUP REQUIRED' in reason for reason in node.reasons())
+    assert any('Open Setup Wizard' in reason for reason in node.reasons())
 
 
 def test_v4_verified_record_does_not_require_session_flags_and_runtime_checks_remain(node):

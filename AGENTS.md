@@ -30,7 +30,7 @@ Paths below are relative to the repository root.
 | Native UR controller integration | `ur_teleop_ws/src/ur_teleop_controllers/src/smooth_scaled_controller.cpp` |
 | Ruckig state/reference logic | `ur_teleop_ws/src/ur_teleop_controllers/include/ur_teleop_controllers/smoothing.hpp` |
 | One-button workflow | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/startup.py` |
-| Engineering evidence | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/engineering.py` |
+| Verified setup and legacy evidence import | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/engineering.py` |
 | GUI | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gui.py` |
 | Settings validation/persistence | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/preferences.py` |
 | Managed process lifecycle/driver generation | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/desktop.py` |
@@ -116,7 +116,7 @@ The order is defaults → selected YAML → adjacent validated operator preferen
 Accepted runtime atomic updates can supersede startup teleop values.
 The desktop passes the same snapshot to driver generation and commissioning.
 A snapshot marked with `effective_sources` must not reread mutable preferences.
-Legacy engineering-session confirmations reset false. Routine V4 Live requires a matching engineering evidence record; never manufacture one from automated tests or persist enable intent.
+Legacy engineering-session confirmations reset false. Routine Live requires a matching verified setup record; never manufacture one from automated tests or persist enable intent.
 Native joint limits and servoj tuning require restart; changing a ROS value alone is insufficient.
 Verify effective runtime settings rather than assuming YAML values are active.
 The committed saved linear speed is 1.5 m/s, versus YAML 0.10 m/s.
@@ -197,4 +197,4 @@ Preserve useful historical notes, but label their obsolete assumptions rather th
 Keep this file actionable; put detailed parameter inventories and procedures in `docs/`.
 Do not add nested AGENTS files unless a package has genuinely distinct engineering requirements.
 
-V4 coordinator requests existing services only; the backend remains authoritative. STOP must retire in-flight requests and withhold heartbeat. Unknown enable outcomes require a fresh backend session before retry. Engineering file hashing runs off the command executor; stale/mismatched evidence blocks motion. Keep `--engineering-session` explicit and supervised, with legacy checks intact.
+V4 coordinator requests existing services only; the backend remains authoritative. STOP must retire in-flight requests and withhold heartbeat. Unknown enable outcomes require a fresh backend session before retry. Setup file hashing runs off the command executor; stale/mismatched setup blocks motion. The Initial Setup Wizard records observed checks plus supervised physical assessments, never checkbox-only proof; UI/documentation changes do not invalidate control identity. Keep `--engineering-session` explicit and supervised, with legacy checks intact.

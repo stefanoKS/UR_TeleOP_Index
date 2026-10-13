@@ -106,3 +106,30 @@ def test_readback_timeout_does_not_leave_form_permanently_locked():
     g.check_readback(time.monotonic())
     assert not g.parameters.pending and not g.parameters.confirmed
     assert not g.settings_result and 'awaiting readback' in g.notifications.current
+
+
+@pytest.mark.parametrize('action,engineering,live', [('setup_preview',True,False),
+    ('setup_live',True,True),('routine_live',False,True)])
+def test_wizard_mode_changes_run_only_on_process_owner(action,engineering,live):
+    m=Manager();m.engineering_session=False;w=ManagerWorker(m)
+    try:
+        assert w.submit(action)
+        assert m.entered.wait(1)
+        assert m.engineering_session is engineering
+        assert m.actions[0] == ('start',live)
+        assert len(m.threads)==1
+    finally:
+        m.release.set();w.close();w.join()
+
+
+def test_stop_supersedes_queued_wizard_restart():
+    m=Manager();w=ManagerWorker(m)
+    try:
+        assert w.submit('start',False);assert m.entered.wait(1)
+        assert w.submit('setup_live')
+        assert w.submit('stop')
+        assert not w.submit('routine_live')
+        m.release.set();until(lambda:len(m.actions)==2)
+        assert m.actions[-1]==('stop',None)
+    finally:
+        m.release.set();w.close();w.join()

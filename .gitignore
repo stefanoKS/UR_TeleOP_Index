@@ -24,3 +24,7 @@ motion_diagnostic_*.json
 
 # Local workcell attestations must never ship as preapproved defaults
 engineering_record.json
+
+# Local installation verification; never distribute a preapproved setup.
+ur_teleop/config/verified_setup.json
+ur_teleop/config/verified_setup.previous-*.json

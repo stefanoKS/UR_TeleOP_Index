@@ -1,4 +1,4 @@
-> **V4 operator workflow:** Open the app → **START TELEOP** → wait for **READY** → hold A to move. Release A to stop; **STOP TELEOP** disarms. Routine Live operation requires a matching, unexpired [engineering record](docs/COMMISSIONING.md#v4-engineering-record). No record has been created or physical validation performed by this software change.
+> **V4 operator workflow:** Open the app → **START TELEOP** → wait for **READY** → hold A to move. Release A to stop; **STOP TELEOP** disarms. Routine Live operation requires a matching [verified setup](docs/INITIAL_SETUP.md) created by the Initial Setup Wizard. No record has been created or physical validation performed by this software change.
 
 # UR10e Valve Index teleoperation
 
@@ -66,7 +66,7 @@ After installation, use the existing **UR10e Teleop** desktop shortcut, if insta
 ```
 
 1. The managed desktop starts **Live, motion disarmed**, with the motion controller inactive.
-2. With a previously commissioned installation and matching V4 record, press **START TELEOP** once with A released.
+2. On first launch, complete the Initial Setup Wizard with authorized supervision. Thereafter, press **START TELEOP** once with A released.
 3. Follow any pendant instruction to run External Control; wait for **READY — PRESS A TO MOVE**. Controller and Servo preparation happen automatically after their prerequisites.
 4. Hold A to move; release A to request a controlled stop.
 5. Press **STOP TELEOP** to clear enable intent. Engineering Preview and the old supervised workflow remain under explicit engineering controls; see [Operation](docs/OPERATION.md).
@@ -142,3 +142,5 @@ Historical design/session records are retained: [V2 notes](ur_teleop/TELEOP_V2.m
 Dashboard status fields and parameter synchronization are documented in the [operator-status contract](docs/OPERATOR_STATUS.md).
 
 [V4 implementation, validation, screenshots and rollback](docs/V4_STARTUP_REPORT.md).
+
+[Initial Setup Wizard, migration and validation report](docs/INITIAL_SETUP.md).

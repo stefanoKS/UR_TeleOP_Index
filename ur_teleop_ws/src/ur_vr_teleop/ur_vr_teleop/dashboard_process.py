@@ -20,7 +20,7 @@ class ManagerWorker:
             if self.closing.is_set():
                 return False
             # Stop supersedes a queued restart; restart can follow an in-flight start.
-            if (self.busy or self.action) and action not in ('stop', 'restart'):
+            if (self.busy or self.action) and action not in ('stop', 'restart', 'setup_preview', 'setup_live', 'routine_live'):
                 return False
             if self.action and self.action[0] == 'stop' and action != 'stop':
                 return False
@@ -44,6 +44,10 @@ class ManagerWorker:
                 try:
                     if action:
                         name, mode = action
+                        if name in ('setup_preview', 'setup_live', 'routine_live'):
+                            self.manager.engineering_session = name != 'routine_live'
+                            mode = name != 'setup_preview'
+                            name = 'restart' if self.manager.children else 'start'
                         if name == 'stop':
                             self.manager.stop()
                             self.manager.message = 'Stopping owned ROS processes'

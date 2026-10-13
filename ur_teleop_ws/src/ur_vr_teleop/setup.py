@@ -9,6 +9,7 @@ setup(
         ('share/ur_vr_teleop/launch', glob('launch/*.launch.py')),
         ('share/ur_vr_teleop/rviz', glob('rviz/*.rviz')),
     ],
+    package_data={'ur_vr_teleop': ['setup_migration.json']},
     install_requires=['setuptools'], zip_safe=True,
     maintainer='Local teleoperation project', maintainer_email='maintainer@example.com',
     description='Guarded UR10e teleop commissioning and local GUI', license='MIT',

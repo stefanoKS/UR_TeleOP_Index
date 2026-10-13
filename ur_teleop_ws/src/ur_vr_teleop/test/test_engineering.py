@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from copy import deepcopy
 import pytest
-from ur_vr_teleop.engineering import Verification, context, identity, digest, LIMITS, VERSION, main
+from ur_vr_teleop.legacy_engineering import Verification, context, identity, digest, LIMITS, VERSION, main
 from ur_vr_teleop.preferences import DEFAULTS
 
 
