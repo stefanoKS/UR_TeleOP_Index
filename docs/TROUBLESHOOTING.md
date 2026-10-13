@@ -95,3 +95,20 @@ Missing velocity feedback is displayed as Unavailable, not zero. Measured TCP
 velocity is a TF-derived estimate. Clutch metrics stop being current on release
 or status loss. See the [field contract](OPERATOR_STATUS.md) for each source and
 its unknown-state behavior.
+
+## V4 one-button startup
+
+| Display | Action |
+|---|---|
+| ENGINEERING SETUP REQUIRED | Authorized engineer checks missing/expired record, calibration/software/mapping identity and approved limits; follow [commissioning](COMMISSIONING.md#v4-engineering-record), never tick a daily bypass |
+| Waiting for External Control | Start the correct program on the pendant; application never issues Play |
+| Robot safety state / FAULT | Inspect pendant and follow site recovery; no automatic fault reset/protective-stop release |
+| Waiting for valid VR tracking | Inspect valid 6-DoF pose/continuity and TF/joints in Advanced diagnostics; one calibrated station is sufficient, but optical signal alone is not |
+| Controller ownership conflict | Resolve the competing controller/action explicitly; startup does not evict it |
+| Service unavailable/rejected | Inspect exact stage and service/driver logs; fix the cause and press START for one controlled retry |
+| Enable timed out; outcome unknown | STOP remains active; use Engineering Restart ROS, then a fresh START after status returns |
+| Servo previously started but status lost | Inspect/recover solver; startup will not create or start a duplicate solver |
+| Effective limits mismatch | Compare visible active values and controller readback; native limits need restart; approval must cover the actual envelope |
+| Tracking restored but no movement | Release A, wait for healthy stationary readiness, then make a fresh press |
+
+For temporary rollback to the prior supervised workflow, see [Engineering and rollback](OPERATION.md#engineering-and-rollback). The domain-42 simulator remains available; no physical robot session is needed for automated tests.

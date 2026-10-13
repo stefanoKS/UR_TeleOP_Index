@@ -7,6 +7,7 @@ import json
 import math
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import rclpy
 from rclpy.duration import Duration
@@ -89,6 +90,18 @@ class Commissioning(Preview):
         if not math.isfinite(self.workspace_radius) or not (self.workspace_radius == 0 or .05 <= self.workspace_radius <= .50):
             raise ValueError('workspace_radius_m must be 0 (disabled) or between 0.05 and 0.50 m')
         self.core.radius = self.workspace_radius if self.workspace_radius else float('inf')
+        self.engineering_required = self.declare_parameter('engineering_required', False,
+            ParameterDescriptor(read_only=True)).value
+        encoded = self.declare_parameter('engineering_context', '', ParameterDescriptor(read_only=True)).value
+        from .engineering import Verification
+        self.engineering = Verification(encoded) if encoded else None
+        self.engineering_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='engineering-evidence')
+        self.engineering_future = None
+        self.engineering_checked = -float('inf')
+        self.engineering_parameters = None
+        self.engineering_valid = False
+        self.engineering_reason = 'ENGINEERING SETUP REQUIRED: no current evidence'
+        self.controller_preparation_allowed = False
         self.configure()
         self.add_on_set_parameters_callback(self.on_settings)
         self.joint_values = self.joint_velocity = None
@@ -316,6 +329,7 @@ class Commissioning(Preview):
 
     def check_graph(self):
         now = time.monotonic()
+        self.check_engineering(now)
         # A request lost during service startup/restart must not wedge polling.
         # Readiness expires independently after 0.6 s; retries never renew it.
         for future_name, client, requested_at in (
@@ -335,10 +349,12 @@ class Commissioning(Preview):
                     'ur_teleop_controllers/SmoothScaledJointTrajectoryController' for c in cs)
                 claiming = {c.name for c in cs if c.state == 'active' and
                             any(i.endswith(('/position', '/velocity', '/effort')) for i in c.claimed_interfaces)}
+                self.controller_preparation_allowed = not claiming and any(c.name == required and c.state == 'inactive' for c in cs)
                 self.controller_ok = (required in active and claiming == {required}) if self.motion_output else not claiming
                 self.controller_at = now
             except Exception:
                 self.controller_ok = False
+                self.controller_preparation_allowed = False
                 self.smoothing_controller_present = False
             self.controller_future = None
         if self.controller_future is None and self.controllers.service_is_ready():
@@ -418,10 +434,80 @@ class Commissioning(Preview):
         if self.motion_output and self.hardware_smoothing and self.gate.max_joint_speed > self.hardware_smoothing['velocity']:
             problems.append('GUI joint speed exceeds final controller speed limit; lower it or update config and restart')
         if t-self.operator_at >= .5: problems.append('Operator GUI heartbeat missing')
-        if not self.get_parameter('alignment_verified').value or self.verified_mapping != tuple(self.get_parameter('tracking_to_robot_rpy_deg').value):
-            problems.append('Confirm direction mapping in GUI')
-        if not self.get_parameter('optical_loss_test_verified').value: problems.append('Perform optical-loss test and confirm in GUI')
+        if self.engineering_required:
+            if self.engineering is not None and not self.engineering_controller_matches():
+                problems.append('Effective native smoothing limits differ from the engineering startup configuration; inspect configuration and restart')
+            if not self.engineering_ready():
+                problems.append(self.engineering_status_reason())
+        else:
+            if not self.get_parameter('alignment_verified').value or self.verified_mapping != tuple(self.get_parameter('tracking_to_robot_rpy_deg').value):
+                problems.append('Confirm direction mapping in GUI')
+            if not self.get_parameter('optical_loss_test_verified').value:
+                problems.append('Perform optical-loss test and confirm in GUI')
         return problems
+
+    def engineering_values(self):
+        return {k: list(self.get_parameter(k).value) if k == 'tracking_to_robot_rpy_deg'
+                else self.get_parameter(k).value for k in DEFAULTS}
+
+    def check_engineering(self, now):
+        # File I/O and hashing never run on the 100 Hz command executor.
+        if not self.engineering_required or self.engineering is None:
+            return
+        if self.engineering_future is not None and self.engineering_future.done():
+            try:
+                self.engineering_valid = self.engineering_future.result()
+                self.engineering_reason = self.engineering.reason
+                self.engineering_parameters = self.engineering_submitted
+                self.engineering_checked = now
+            except Exception as error:
+                self.engineering_valid = False
+                self.engineering_reason = 'ENGINEERING SETUP REQUIRED: ' + str(error)
+            self.engineering_future = None
+        if self.engineering_future is None and now-self.engineering_checked >= .5:
+            self.engineering_submitted = self.engineering_values()
+            self.engineering_future = self.engineering_pool.submit(self.engineering.refresh, self.engineering_submitted)
+
+    def engineering_status_reason(self):
+        if self.engineering_valid and not self.engineering_ready():
+            return 'ENGINEERING SETUP REQUIRED: effective tuning changed or evidence stale'
+        return self.engineering_reason
+
+    def engineering_controller_matches(self):
+        if not self.hardware_smoothing or self.engineering is None:
+            return False
+        settings = self.engineering.context['settings']
+        expected = dict(velocity=settings['teleop']['max_joint_speed_rad_s'],
+                        acceleration=settings['robot'].get('joint_command_acceleration_rad_s2', 1.),
+                        jerk=settings['robot'].get('joint_command_jerk_rad_s3', 10.))
+        return all(math.isclose(self.hardware_smoothing[k], v, rel_tol=1e-9)
+                   for k, v in expected.items())
+
+    def engineering_ready(self):
+        return (self.engineering_valid and time.monotonic()-self.engineering_checked < 2.
+                and self.engineering_parameters == self.engineering_values())
+
+    def tracking_valid(self):
+        t = time.monotonic()
+        return bool(self.pose_ok and self.flag and t-self.flag_at < self.observation_timeout
+                    and fresh(*self.records.get('pose', (-1e30, 0)), t,
+                              self.get_clock().now().nanoseconds, self.observation_timeout)
+                    and self.pose_quality.continuous and self.optical and self.policy_optical_ready()
+                    and t-self.optical_at < .20 and t-self.optical_since >= .5)
+
+    def robot_preparation_reason(self):
+        if self.robot_mode != 7 or self.safety_mode not in (1, 2):
+            return 'Robot mode / safety state blocks startup; inspect the pendant'
+        if not self.program_running:
+            return 'Start the External Control program on the pendant; waiting for confirmed running state'
+        if time.monotonic()-self.scale_at >= .25 or not math.isfinite(self.speed_scale) or not 0 < self.speed_scale <= 1:
+            return 'Waiting for fresh, nonzero speed scaling; check pendant program and slider'
+        return ''
+
+    def destroy_node(self):
+        if hasattr(self, 'engineering_pool'):
+            self.engineering_pool.shutdown(wait=False, cancel_futures=True)
+        return super().destroy_node()
 
     def arm(self, request, response):
         # GUI must be live; A released; measured velocity must establish standstill.
@@ -540,6 +626,14 @@ class Commissioning(Preview):
         self.operator_status.publish(String(data=json.dumps({
             'mode': 'LIVE OUTPUT' if self.motion_output else 'DRY RUN — ROBOT OUTPUT DISABLED',
             'session_id': self.session_id,
+            'engineering_required': self.engineering_required,
+            'robot_fault': self.safety_mode is not None and self.safety_mode not in (1, 2),
+            'engineering_verified': self.engineering_ready() if self.engineering_required else False,
+            'engineering_reason': self.engineering_status_reason(),
+            'tracking_valid': self.tracking_valid(),
+            'robot_preparation_ready': not self.robot_preparation_reason(),
+            'robot_preparation_reason': self.robot_preparation_reason(),
+            'controller_preparation_allowed': self.controller_preparation_allowed and time.monotonic()-self.controller_at < .6,
             # One complete readback after configure(), in persisted/ROS units.
             'effective_parameters': {key: (list(self.get_parameter(key).value)
                 if key == 'tracking_to_robot_rpy_deg' else self.get_parameter(key).value)
@@ -549,6 +643,7 @@ class Commissioning(Preview):
             'optical_loss_test_verified': bool(self.get_parameter('optical_loss_test_verified').value),
             'operator_heartbeat_fresh': time.monotonic()-self.operator_at < .5,
             'controller_state_fresh': time.monotonic()-self.controller_at < .6,
+            'servo_started': math.isfinite(self.servo_at),
             'servo_status_fresh': time.monotonic()-self.servo_at < .25,
             'teleop_control_mode': self.core.control_mode,
             'tracking_station_policy': self.station_policy,

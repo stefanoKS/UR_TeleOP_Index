@@ -10,7 +10,7 @@ This reference covers application parameters, managed launch settings, and proje
 4. The desktop writes a session `effective_config.yaml` with `effective_sources`. Loading this snapshot does not reread the adjacent preference file. Driver generation and commissioning use the same snapshot.
 5. Accepted atomic GUI updates can change runtime teleop parameters. Startup-only native limits still require restarting the stack. Saving follows backend acceptance; a newly saved joint-speed request is retained for restart while the running value remains unchanged.
 
-`alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
+`alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. These are legacy supervised engineering-session checks; routine V4 Live uses the engineering record instead. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
 
 Inspect the panel, `/vr_real/operator_status`, ROS parameters, and session `effective_settings.log`. A snapshot records startup, not every subsequent runtime update. `preferences.py` is authoritative for saved-key validation; `commissioning.py` validates runtime updates.
 
@@ -87,7 +87,7 @@ Camera node `/d405_camera` declares `serial` with the same default. Its resoluti
 | Control | Meaning / unit | Default | Allowed / overrides | Restart |
 |---|---|---|---|---|
 | Desktop `--config` | Runtime YAML path | `~/Documents/Teleop/ur_teleop/config/real_teleop.yaml` | Existing config; adjacent preferences overlay | New desktop/session |
-| Desktop `--live` | Select Live setup initially | Absent: Preview | Flag; still starts disabled/inactive | New stack |
+| Desktop `--live` / `--preview` | Select initial output mode | Live | Flags; still starts disabled/inactive | New stack |
 | Launch `config_file` | Commissioning YAML/snapshot | Same home-relative YAML path | Passed by desktop as effective snapshot | Yes |
 | Launch `motion_output_enabled` | Commissioning output mode | `false` | Literal `true` or `false` | Yes |
 | Launch `launch_rviz` | Start RViz child | `true`; desktop sets false and owns RViz separately | Boolean | Relaunch / managed Open RViz |
@@ -116,7 +116,7 @@ These arguments are assembled by `desktop.py`, not read from saved GUI preferenc
 | `script_sender_port` | External Control script port / TCP port | 50002 | Fixed in launcher; match network/robot setup |
 | `headless_mode` | Automatic script handling / bool | false | Pendant External Control workflow |
 | `initial_joint_controller` | Controller selected at startup | `scaled_joint_trajectory_controller` | Must preserve gate/plugin ownership contract |
-| `activate_joint_controller` | Activate on startup / bool | false | Operator Prepare remains a separate step |
+| `activate_joint_controller` | Activate on startup / bool | false | START automatically prepares after prerequisites; starts inactive |
 | `launch_rviz` | Driver RViz / bool | false | Desktop owns RViz separately |
 
 ## Native controller configuration
@@ -223,3 +223,11 @@ The GUI does not infer per-value startup provenance from a numeric match. Consul
 `effective_settings.log` for actual YAML/default/saved source information; that
 startup record is not proof of later runtime values. No defaults, ranges, units,
 persisted keys, or committed operator overrides changed in this stabilization.
+
+## V4 startup and engineering configuration
+
+No operator preference schema or numeric default changed. Desktop defaults to Live, disabled/inactive. `--preview` selects Preview; `--live` remains compatible. `--engineering-session` explicitly selects the supervised legacy confirmation/manual Enable workflow, intended for initial physical commissioning and rollback. The corresponding launch argument `engineering_session` defaults false. Direct launch `motion_output_enabled` remains false by default.
+
+Read-only backend `engineering_required` is true for normal Live launch and false for Preview/explicit engineering sessions. Read-only `engineering_context` carries the original effective settings and installation, record and tracking-calibration paths as JSON. The effective snapshot adds top-level `engineering_installation` and `engineering_record_path`; neither is a saved tuning key or motion authorization. Legacy confirmation parameters cannot replace a missing record in normal Live.
+
+See [record creation and invalidation](COMMISSIONING.md#v4-engineering-record) for the exact identity/envelope and engineering trust boundary. For separate low-speed profiles outside the repository, installation discovery falls back to the active package location; the record stays beside that profile. Its installation must match the `--root` used to issue the record. Do not create or copy an attestation to avoid genuine commissioning.

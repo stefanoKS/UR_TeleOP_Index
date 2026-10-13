@@ -131,7 +131,7 @@ def run():
         # Malformed optional diagnostics remain unknown, never zero or green.
         malformed=dict(status(),velocity_diagnostics=['bad'],optical_stations=None,pose_fresh=None,alignment_verified=None)
         gui.update_dashboard(False,malformed)
-        assert 'Unavailable' in gui.diagnostics.get() and 'Unavailable' in gui.lighthouse.get()
+        assert 'Unavailable' in gui.diagnostics.get() and 'WAITING' in gui.lighthouse.get()
         assert 'Unknown' in gui.readiness['alignment'][0].get()
         gui.update_dashboard(False,dict(status(),controller_state_fresh=False,servo_status_fresh=False))
         assert 'unavailable' in gui.readiness['controller'][0].get()
@@ -140,8 +140,47 @@ def run():
         assert 'Stale' in gui.motion.get()
         assert all('Unknown' in value.get() for value,_ in gui.readiness.values())
         pump()
-        output=Path('/tmp/ur_teleop_ui_v3_1');output.mkdir(exist_ok=True)
+        # Exercise one-button preparation using real async ROS services, no robot.
+        from controller_manager_msgs.srv import SwitchController
+        from std_srvs.srv import Trigger, SetBool
+        backend.set_parameters_atomically([Parameter('max_joint_speed_rad_s',value=.7)])
+        state=dict(hardware_smoothing={'velocity':.7,'acceleration':1.,'jerk':10.},controller_ready=False,controller_preparation_allowed=True,
+                   servo_status_fresh=False,motion_ready=False,enable_requested=False,armed=False)
+        calls=[]
+        original_status=status
+        def status():
+            return dict(original_status(),**dict(state,mode='LIVE OUTPUT',tracking_valid=True,
+                active_station_count=1,engineering_verified=True,robot_preparation_ready=True,
+                stationary=True,a_held=False,blockers=[],reason='Synthetic backend — no robot connected'))
+        def prepare(req,res):
+            assert req.activate_controllers==['scaled_joint_trajectory_controller'] and not req.deactivate_controllers
+            calls.append('prepare');state['controller_ready']=True;res.ok=True;return res
+        def servo(req,res):
+            calls.append('servo');state.update(servo_status_fresh=True,motion_ready=True)
+            res.success=True;res.message='Synthetic Servo started';return res
+        def enable(req,res):
+            calls.append('enable');state.update(enable_requested=req.data,armed=req.data)
+            res.success=True;res.message='Synthetic backend enabled';return res
+        def disarm(req,res):
+            calls.append('disarm');state.update(enable_requested=False,armed=False)
+            res.success=True;res.message='Synthetic backend disarmed';return res
+        services=[backend.create_service(SwitchController,'/controller_manager/switch_controller',prepare),
+                  backend.create_service(Trigger,'/vr_real/servo_node/start_servo',servo),
+                  backend.create_service(SetBool,'/vr_real/set_enabled',enable),
+                  backend.create_service(Trigger,'/vr_real/disarm',disarm)]
+        pump(.8);assert not gui.parameters.restart
+        gui.start_teleop();gui.start_teleop();pump(2)
+        assert calls==['prepare','servo','enable'],calls
+        assert gui.startup.state=='READY' and gui.header_state.get()=='READY'
+        assert not gui.servo_button.winfo_viewable() and not gui.prepare_button.winfo_viewable()
+        gui.stop_teleop();pump(.5)
+        assert not state['enable_requested'] and not gui.startup.requested
+        calls.clear();gui.start_teleop();pump(1)
+        assert calls==['enable'],calls
+        output=Path('/tmp/ur_teleop_ui_v4');output.mkdir(exist_ok=True)
         gui.dismiss_notification()
+        gui.notify('ISOLATED GUI TEST — synthetic status, no robot connected')
+        gui.notifications.expires=float('inf')
         for width,height in ((1440,900),(1366,768),(1280,720)):
             gui.root.geometry(f'{width}x{height}+0+100')
             gui.advanced_open.set(True);gui.toggle_advanced();pump()
@@ -167,6 +206,8 @@ def run():
                 ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/'dashboard-1280x720-advanced-bottom.png')
             gui.canvas.yview_moveto(0);pump(.1)
             x,y=gui.root.winfo_rootx(),gui.root.winfo_rooty()
+            ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'dashboard-{width}x{height}-advanced.png')
+            gui.advanced_open.set(False);gui.toggle_advanced();pump(.1)
             ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'dashboard-{width}x{height}.png')
         # Close cancels futures and prevents late widget callbacks.
         pending=Future();gui.track_request('servo',pending)

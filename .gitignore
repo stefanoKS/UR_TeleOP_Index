@@ -21,3 +21,6 @@ motion_diagnostic_*.json
 # Fetch these upstream checkouts using dependencies.repos
 /ur_teleop/tools/libsurvive/
 /ur_calibration_fix_ws/src/Universal_Robots_ROS2_Driver/
+
+# Local workcell attestations must never ship as preapproved defaults
+engineering_record.json

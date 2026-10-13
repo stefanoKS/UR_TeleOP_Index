@@ -10,14 +10,14 @@ Use the workstation's **UR10e Teleop** shortcut or run:
 ~/Documents/Teleop/ur_teleop/start_teleop.sh
 ```
 
-The desktop starts Preview automatically. It manages the robot driver, tracking, commissioning nodes, and optional camera/RViz. Preview connects to real robot state but does not publish teleop joint commands. It expects motion controllers to remain inactive. If you need a completely hardware-free environment, use the [mock simulator](COMMISSIONING.md#automated-validation).
+The desktop starts **Live automatically, with motion disarmed and the scaled controller inactive**. Press START TELEOP only when the work area is ready. A matching V4 engineering record is required for routine operation. It manages the robot driver, tracking, commissioning nodes, and optional camera/RViz. Preview connects to real robot state but does not publish teleop joint commands. It expects motion controllers to remain inactive. If you need a completely hardware-free environment, use the [mock simulator](COMMISSIONING.md#automated-validation).
 
 `start_gui.sh` opens only the operator panel for an existing stack. It does not start tracking or the driver. Avoid launching duplicate panels or bridges: duplicate command publishers and missing ownership checks can block readiness.
 
 ## Understand the dashboard
 
 The operator panel is a single resizable dashboard. At the supported 1366×768
-layout, session controls, readiness, Enable, Disarm, live tracking status, and
+layout, START TELEOP, STOP TELEOP, tracking/robot status, and
 quick tuning remain visible without scrolling. The header shows the output mode
 (Preview/Live) separately from actual readiness. A green optical indicator is
 not a valid-pose or robot-ready claim.
@@ -30,15 +30,10 @@ viewer in a separate window; it is not collision sensing.
 
 | Control or display | Meaning |
 |---|---|
-| Preview / Live setup | Restart managed ROS in the selected output mode; Live still starts disabled |
-| Stop ROS | Stop this desktop's owned processes |
-| Open logs | Session logs, commands, and effective configuration |
-| Open RViz | View model, measured tool pose, and requested movement |
-| Open D405 camera | Optional RGB/depth viewer; not collision protection |
-| Start Servo solver | Start Cartesian-to-joint solver; does not enable robot motion |
-| Prepare controller | Request activation of the scaled controller when prerequisites pass; cannot evict a competing controller |
-| Enable teleop | Request readiness/arming; A still controls active movement |
-| DISARM TELEOP | Clear enable intent and request a software stop |
+| START TELEOP | Asynchronously prepare the controller, start Servo if needed, request enable, then wait for actual backend arming |
+| STOP TELEOP | Interrupt startup, clear enable intent, and request a software stop; always available |
+| Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, individual preparation, legacy supervised controls, full backend diagnostics |
+| Open RViz / D405 camera | Optional visualization; camera is not collision protection |
 | Apply changes | Submit the edited named settings to the running backend while disarmed with A released |
 | Apply + save | Save accepted persistent tuning for next launch; a changed joint speed still requires Restart ROS |
 | Revert edits / Restore defaults | Revert to current running values, or stage built-in defaults for review; neither silently changes a running stack |
@@ -52,7 +47,7 @@ Status explains what is blocking motion. Measured TCP and joint feedback continu
 3. Check measured `tool0` against the actual robot/tool arrangement. A custom pendant TCP is not automatically the model's `tool0`.
 4. In Preview, verify the sign of all three translations and rotations with small hand movements. Confirm the alignment only after checking the actual mapping.
 5. Verify optical loss with motion controllers inactive. Both stations blocked must remove readiness; one station remaining can preserve readiness if its pose remains valid.
-6. Apply the two session confirmation checkboxes only after those checks. They are intentionally not saved as future motion permission.
+6. In an explicit supervised engineering session, apply the two legacy session confirmations only after those checks. Record the evidence under [V4 commissioning](COMMISSIONING.md#v4-engineering-record). Routine operators do not submit these confirmations.
 
 If tracking has been recalibrated or a station moved, repeat alignment verification. Do not use a station-count policy switch to repair bad tracking; the supported policy is already `any_station`.
 
@@ -68,33 +63,36 @@ A saved joint-speed change requires restarting the ROS stack because the final n
 
 ## Authorized live session
 
-1. Establish the physical work area and pendant stop access according to the site's robot procedure.
-2. Select **Live setup** in the desktop. This allows a command publisher to exist; it does not enable motion.
-3. Run the prepared External Control program on the pendant. Check robot state, safety state, speed scaling, joints, TF, and tracking in the panel.
-4. Use **Start Servo solver** and **Prepare controller** as required. Prepare needs a released clutch, a disarmed and stationary robot, and valid robot readiness. It will not stop a competing controller for you.
-5. Review mode, mapping, and actual effective speed/acceleration limits. Complete and apply the session confirmations.
-6. Select **Enable teleop**. Wait for readiness with A released.
-7. Press and hold A. Start with the small supervised movements defined in the commissioning procedure. Release A to end each movement.
+1. Open the application. It starts the managed Live stack disarmed.
+2. Press **START TELEOP** once, with A released. Preparation waits for real robot, tracking, joints/TF and controller ownership status.
+3. If instructed, start the External Control program on the pendant. The application does not press Play, change robot mode, or release protective stops.
+4. Wait for **READY — PRESS A TO MOVE**, derived from backend `armed` and `motion_ready`.
+5. Hold A to move; release A to request a controlled stop.
+6. Press **STOP TELEOP** to clear enable intent. A new START is required afterward.
 
-Enable does not clear a protective stop, start the pendant program, or activate a missing controller automatically. Never use command-line trajectory publishers to work around a blocked panel.
+A previously commissioned, unchanged installation needs no daily checkboxes or separate Servo/controller buttons. `ENGINEERING SETUP REQUIRED` means the record is missing, expired, changed, or outside its approved tuning envelope. Do not invent confirmations to clear it. Effective TCP speed caps and the active final joint limit remain visible even while editing drafts. Saved high limits are not evidence of approval.
+
+Missing hardware prerequisites wait without repeated clicks. Failed services show the failing stage and require a controlled START retry after correction. An **enable service timeout with unknown outcome requires Restart ROS**: local cancellation cannot undo a request already received by the server. STOP remains available; the GUI withholds its heartbeat to prevent a delayed enable from restoring motion permission.
+
+Tracking loss preserves the existing bounded recovery: release A, wait for valid tracking and stationary readiness, then press A again. Healthy Servo/controller components are not prepared again. ROS/backend restart or GUI heartbeat loss requires a new START. STOP is a software stop, not an emergency stop.
 
 ## Stop and recover
 
 - **Normal stop:** release A. This requests zero Cartesian demand and downstream stopping; it is not an instantaneous physical halt.
-- **Disarm:** click **DISARM TELEOP** to clear enable intent. The panel explicitly describes this as a ramped software stop.
+- **Disarm:** click **STOP TELEOP** to clear enable intent. The panel explicitly describes this as a ramped software stop.
 - **Emergency:** use the pendant/physical emergency stop under the site's procedure. Software Disarm is not a replacement.
-- **Tracking fault:** stop hand movement, release A, and diagnose the cause. Restored tracking while A is held cannot resume motion. Once healthy and stationary, the stack may rearm if Enable intent survived; a new A press is required. If Enable was cleared, enable again after checks.
+- **Tracking fault:** stop hand movement, release A, and diagnose the cause. Restored tracking while A is held cannot resume motion. Once healthy and stationary, the stack may rearm if Enable intent survived; a new A press is required. If enable intent was cleared, press START TELEOP again after checks.
 - **Protective stop:** investigate and recover through the robot's established procedure. The application does not silently clear it.
 
 Losing one station should not stop a valid remaining pose. If it does, inspect pose quality and timing rather than assuming a hidden two-station rule.
 
 ## Shutdown and evidence
 
-Release A, disarm, and wait for measured motion to stop. Use **Stop ROS**, then close the desktop. Follow the pendant procedure for ending External Control. The desktop stops only processes it owns; unrelated ROS processes are not automatically killed.
+Release A, disarm, and wait for measured motion to stop. Close the desktop to stop its owned stack; Engineering **Stop ROS** is also available. Follow the pendant procedure for ending External Control. The desktop stops only processes it owns; unrelated ROS processes are not automatically killed.
 
 Session material is under `ur_teleop/logs/`: component logs, `commands.json`, `effective_config.yaml`, and `effective_settings.log`. These record startup settings; accepted runtime changes may be newer. Capture current panel/status and ROS parameter values when diagnosing a session. Logs and recordings are ignored by Git.
 
-## Dashboard edits and confirmations (V3.1)
+## Dashboard settings and engineering confirmations
 
 The parameter-state line distinguishes **No pending edits**, **Unsaved parameter
 changes**, invalid text, applying, waiting for confirmation, restart required,
@@ -117,7 +115,7 @@ not submit changes or alter session checkboxes. Restore Defaults only stages
 editable defaults; hidden compatibility settings remain intact. A mapping edit
 clears the local alignment checkbox so an old check cannot approve a new mapping.
 
-Checkboxes express draft intent. The checklist uses backend confirmation;
+In explicit supervised engineering sessions, legacy checkboxes express draft intent. Routine Live uses the V4 engineering record. The checklist uses backend confirmation;
 checking a box alone shows **Pending application**, not **Verified**. Backend
 mapping invalidation revokes verification. Restart clears local session checks;
 stale status shows **Unknown / status unavailable**.
@@ -132,3 +130,9 @@ hide in Velocity mode while preserving their text. Action notifications are
 separate from live readiness: successes remain for five seconds; errors remain
 until dismissed or corrected. **Action history** shows the last 40 actions and
 all current blockers. Long process messages are available there in full.
+
+## Engineering and rollback
+
+Engineering Preview is available under **Engineering / diagnostics** or with `start_teleop.sh --preview`; the separate domain-42 simulator remains hardware-free. The technical panel is intended for authorized engineers, and its manual Enable is disabled during routine V4 Live operation.
+
+To temporarily use the previous supervised workflow, stop the owned stack and close the app, then run `ur_teleop/start_teleop.sh --preview --engineering-session`. Under Engineering, select Live, perform the documented mapping and optical-loss checks, apply the session confirmations, prepare the controller, start Servo, and use **Enable (supervised commissioning)**. This explicit mode uses the original session checks; it does not fabricate a V4 record or clear robot protections. Return to the normal launcher to restore record-based startup.

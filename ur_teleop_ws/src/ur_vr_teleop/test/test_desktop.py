@@ -245,3 +245,13 @@ def test_optional_camera_exit_does_not_stop_robot_stack(tmp_path):
         assert manager.children['teleop'].poll() is None
     finally:
         manager.close()
+
+
+def test_v4_default_is_live_but_preview_and_supervised_rollback_are_explicit():
+    from ur_vr_teleop.desktop import parse_options
+    assert parse_options([]).live
+    assert not parse_options([]).engineering_session
+    assert parse_options(['--live']).live
+    assert not parse_options(['--preview']).live
+    assert parse_options(['--preview','--engineering-session']).engineering_session
+    with pytest.raises(SystemExit):parse_options(['--live','--preview'])

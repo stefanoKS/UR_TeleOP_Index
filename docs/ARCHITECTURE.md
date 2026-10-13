@@ -77,7 +77,7 @@ Native velocity, acceleration, jerk, following-error, period, and finite-state c
 
 ## Supervision and stopping
 
-Readiness combines tracking/TF/joint freshness, robot RUNNING state, safety NORMAL or REDUCED state, External Control program running, nonzero speed scaling, Servo state, controller ownership, command watchdog verification, GUI heartbeat, and session confirmations. REDUCED does not disable the robot's independent limits. Servo codes 2, 4, and 5 block motion; permitted codes 0, 1, 3, and 6 retain Servo's corresponding behavior. Unknown or stale status blocks.
+Readiness combines tracking/TF/joint freshness, robot RUNNING state, safety NORMAL or REDUCED state, External Control program running, nonzero speed scaling, Servo state, controller ownership, command watchdog verification, GUI heartbeat, and a matching engineering record in routine Live (legacy session confirmations only in explicit supervised engineering sessions). REDUCED does not disable the robot's independent limits. Servo codes 2, 4, and 5 block motion; permitted codes 0, 1, 3, and 6 retain Servo's corresponding behavior. Unknown or stale status blocks.
 
 Controller discovery must show the scaled controller as the sole position claimant in live operation. Dry-run expects motion controllers inactive. The configured controller command watchdog must be in the accepted **0.10–0.25 s** interval, with `constraints.goal_time` below it. Listing and parameter checks are not replaced by a GUI label.
 
@@ -89,7 +89,7 @@ sequenceDiagram
     participant Servo
     participant Gate
     participant Controller
-    Operator->>GUI: Enable after confirmations
+    Operator->>GUI: START TELEOP after engineering commissioning
     GUI->>Teleop: Enable intent and heartbeat
     Operator->>Teleop: Release A then press A
     Teleop->>Teleop: Capture fresh baseline
@@ -152,7 +152,7 @@ Rates are configured timer/output targets, not measured timing guarantees. Names
 | `/vr_real/teleop/set_parameters_atomically` | `rcl_interfaces/srv/SetParametersAtomically` | GUI applies settings and session confirmations together |
 | `/vr_real/servo_node/start_servo` | `std_srvs/srv/Trigger` | Start solver; does not enable robot motion |
 | `/controller_manager/list_controllers` | `controller_manager_msgs/srv/ListControllers` | Ownership/readiness polling |
-| `/controller_manager/switch_controller` | `controller_manager_msgs/srv/SwitchController` | GUI Prepare requests scaled controller activation; does not stop a competitor |
+| `/controller_manager/switch_controller` | `controller_manager_msgs/srv/SwitchController` | GUI startup coordinator requests scaled controller activation; does not stop a competitor |
 | `/scaled_joint_trajectory_controller/get_parameters` | `rcl_interfaces/srv/GetParameters` | Verify watchdog and native smoothing parameters |
 
 The standard controller exposes `control_msgs/action/FollowJointTrajectory`; teleop does not send action goals. ROS parameter services and other standard UR/MoveIt interfaces also exist; this table covers the application control/diagnostic contract, not every interface of external packages.
@@ -164,3 +164,5 @@ The D405 uses a C++ librealsense capture child and Python ROS publisher, isolate
 The domain-42 `ur_vr_sim_teleop` launch uses `GenericSystem`, `sim_` joints, a forward position controller, 100 Hz Servo, and the original 50 Hz position clutch. It rejects a non-mock URDF and starts motion disabled. It does not test the native real-path smoother or all commissioning checks. Mock integration tests separately exercise the production gate and Servo path on localhost domains 147/148.
 
 Dashboard status fields and parameter synchronization are documented in the [operator-status contract](OPERATOR_STATUS.md).
+
+V4 adds a pure asynchronous `Startup` coordinator in the GUI and background `Verification` of engineering evidence in commissioning. It uses existing services and no additional command publisher. Desktop defaults to Live disarmed; Preview remains explicit. See [status contract](OPERATOR_STATUS.md#v4-authoritative-readiness-and-coordinator) and [engineering record](COMMISSIONING.md#v4-engineering-record).

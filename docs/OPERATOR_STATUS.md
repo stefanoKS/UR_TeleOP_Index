@@ -16,7 +16,7 @@ All fields below require fresh status. No GUI subscription commands motion.
 | Enable / `enable_requested` | bool | Backend enable intent, independent of clutch | Enable unavailable; pending request uses separate label |
 | Robot / `robot_ready` | bool | Existing latched robot mode, safety mode and program predicate; not a heartbeat or complete readiness | Unknown / not ready |
 | Controller / `controller_ready`, `controller_state_fresh` | bool, bool | Existing ownership result and controller-list age <0.6 s | Unknown unless the source check is fresh |
-| Overall observations / `observations_healthy` | bool | Combined tracking, Joy, joint and TF validation; not a dedicated joint-only measurement | Unknown / not ready |
+| Advanced diagnostics only / `observations_healthy` | bool | Combined tracking, Joy, joint and TF validation; not a dedicated joint-only measurement | Unknown / not ready |
 | Pose / `pose_fresh` | bool | Existing pose/frame flag and source freshness predicate | Unknown / not fresh |
 | Optical / `optical` | bool | Existing optical presence with its own age check; not proof of 6-DoF pose | Unknown / absent |
 | Stations / `optical_stations` | object of station IDs to nonnegative integer paired-sensor counts | Existing bridge diagnostic counts, zeroed by backend on optical diagnostic expiry; either station suffices for presence | Unavailable, never invented zero |
@@ -39,7 +39,7 @@ The new read-only fields are `effective_parameters`, `alignment_verified`,
 `optical_loss_test_verified`, `operator_heartbeat_fresh`,
 `controller_state_fresh`, and `servo_status_fresh`. Pose, stations,
 readiness, rejection and velocity diagnostics already existed in the reviewed
-commit. No gating predicates, freshness thresholds, or control outputs changed.
+commit. Those V3.1 additions did not change gating. V4 additionally replaces daily confirmation dependencies in normal Live with verified engineering evidence; dynamic guards remain.
 
 ## Parameter and service lifecycle
 
@@ -77,3 +77,21 @@ actions, never process work. Stop supersedes queued restart; close cancels queue
 actions and cleans up after an in-flight start. The desktop joins this owner
 before destroying ROS context; process identity, ownership and escalation remain
 inside the unchanged `ProcessManager` implementation.
+
+## V4 authoritative readiness and coordinator
+
+| Field | Meaning |
+|---|---|
+| `engineering_required` | Normal Live requires evidence; Preview/explicit supervised sessions retain legacy checks |
+| `engineering_verified`, `engineering_reason` | Matching, fresh evidence result and exact failure explanation; not inferred from legacy flags |
+| `tracking_valid` | Fresh accepted pose and bridge flag, pose continuity, stable fresh optical data from either station; signal alone cannot set it |
+| `robot_preparation_ready`, `robot_preparation_reason` | Existing mode/safety/program checks plus fresh finite nonzero speed scaling; exact pendant/wait instruction |
+| `robot_fault` | Received safety mode outside NORMAL/REDUCED |
+| `controller_preparation_allowed` | Fresh controller list, required controller inactive, no competing active motion claimant |
+| `servo_started` | At least one Servo status received in this backend session; stale status never triggers another start automatically |
+
+The normal dashboard shows TRACKING VALID/WAITING/LOST and ROBOT READY/WAITING/FAULT. Paired-sensor counts and combined observation reasons remain in Advanced diagnostics. READY requires both backend `armed` and `motion_ready`; submitted service requests are never readiness.
+
+`Startup` transitions through IDLE, WAITING_FOR_STACK, WAITING_FOR_ROBOT, WAITING_FOR_TRACKING, PREPARING_CONTROLLER, STARTING_SERVO, ENABLING_TELEOP, WAITING_FOR_READINESS, READY and ERROR. The adapter retains canceled in-flight operations while stopping. Each preparation stage waits for its acknowledgment and then authoritative readback. Service/readback deadlines are five seconds; missing physical inputs wait without automatic service retries. No sleep chaining or new motion publisher is used.
+
+STOP immediately retires Start intent and publishes absent heartbeat plus the existing disarm request. It preserves an in-flight request until completion/timeout, then disarms again; heartbeat remains absent until a fresh Start. Unknown enable outcomes require a new backend session, since canceling a client Future cannot undo a server request. Session generations discard old responses. GUI close retires requests and the existing manager closes only owned children. Stack/session restart and heartbeat loss require a new Start. Ordinary tracking recovery stays in the backend and still requires release, stationary recovery and a fresh A press.

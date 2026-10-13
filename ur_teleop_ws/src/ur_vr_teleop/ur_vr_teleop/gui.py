@@ -20,6 +20,7 @@ from .preferences import (DEFAULTS, PARAMETER_REGISTRY, PARAMETERS_BY_KEY,
 from .dashboard_state import (ParameterState, Notifications, equivalent, boolean, display_text,
                               vector, vector_text, station_text, motion_text)
 from .dashboard_process import ManagerWorker
+from .startup import Startup
 
 COLORS = {'navy': '#17263D', 'blue': '#2563EB', 'green': '#15803D', 'amber': '#D97706',
           'red': '#DC2626', 'bg': '#F3F6FA', 'card': '#FFFFFF', 'text': '#1F2937', 'muted': '#64748B'}
@@ -35,6 +36,11 @@ class OperatorGUI:
         self.pending, self.request_meta = [], {}
         self.parameters = ParameterState()
         self.notifications = Notifications()
+        self.startup = Startup()
+        self.startup_request = None
+        self.retiring_startup = False
+        self.uncertain_enable_session = None
+        self.heartbeat_allowed = False
         self.session = None
         self.generation = 0
         self.confirmation_rejected = False
@@ -95,25 +101,44 @@ class OperatorGUI:
         self.blockers = tk.Text(strip,height=1,wrap='word',font=('DejaVu Sans',9),relief='flat',bg='#E8EEF6'); self.blockers.grid(row=2,column=0,columnspan=3,sticky='ew',padx=12,pady=(0,7)); self.blockers.configure(state='disabled');self.blockers.grid_remove()
 
     def operations(self, parent):
-        outer=ttk.Frame(parent,style='App.TFrame'); session=self.card(outer,'Session controls'); session.pack(fill='x',pady=(0,8))
-        buttons=ttk.Frame(session,style='Card.TFrame');buttons.pack(fill='x')
-        buttons.columnconfigure((0,1),weight=1)
-        for index,(text, action, mode, style) in enumerate( [('Start Preview','start',False,'TButton'),('Start Live Setup','start',True,'Primary.TButton'),('Restart ROS','restart',None,'TButton'),('Stop ROS','stop',None,'Danger.TButton')]):
-            ttk.Button(buttons,text=text,style=style,command=lambda a=action,m=mode:self.stack_action(a,m)).grid(row=index//2,column=index%2,sticky='ew',padx=1,pady=2)
-        self.stack_status=tk.StringVar(value='Stopped'); ttk.Label(session,textvariable=self.stack_status,style='Muted.TLabel',wraplength=270).pack(anchor='w',pady=(3,0))
-        ready=self.card(outer,'Readiness checklist'); ready.pack(fill='both',expand=True,pady=(0,8)); self.readiness={}
-        for key,label in [('robot','Robot / External Control'),('controller','Controller ownership'),('joints','Joint feedback valid'),('pose','VR pose fresh'),('optical','Lighthouse optical signal'),('alignment','Alignment verified'),('heartbeat','Operator heartbeat'),('confirmations','Session confirmations')]:
-            value=tk.StringVar(value='● Waiting'); w=ttk.Label(ready,textvariable=value,style='Muted.TLabel',wraplength=270); w.pack(anchor='w',pady=1); self.readiness[key]=(value,w)
-        motion=self.card(outer,'Motion controls'); motion.pack(fill='x')
-        self.servo_button=ttk.Button(motion,text='Start Servo',command=lambda:self.call('servo')); self.prepare_button=ttk.Button(motion,text='Prepare controller',command=self.prepare_controller); self.enable_button=ttk.Button(motion,text='ENABLE TELEOP',style='Primary.TButton',command=self.toggle_enabled); self.disarm_button=ttk.Button(motion,text='DISARM — software stop',style='Danger.TButton',command=lambda:self.call('disarm'))
-        preparation=ttk.Frame(motion,style='Card.TFrame');preparation.pack(fill='x')
-        preparation.columnconfigure((0,1),weight=1)
-        self.servo_button.grid(in_=preparation,row=0,column=0,sticky='ew',padx=1)
-        self.prepare_button.grid(in_=preparation,row=0,column=1,sticky='ew',padx=1)
-        self.servo_button.lift();self.prepare_button.lift()
-        for b in (self.enable_button,self.disarm_button):b.pack(fill='x',pady=2)
+        outer=ttk.Frame(parent,style='App.TFrame')
+        motion=self.card(outer,'Teleoperation'); motion.pack(fill='x',pady=(0,8))
+        self.enable_button=ttk.Button(motion,text='START TELEOP',style='Primary.TButton',command=self.start_teleop)
+        self.disarm_button=ttk.Button(motion,text='STOP TELEOP',style='Danger.TButton',command=self.stop_teleop)
+        for button in (self.enable_button,self.disarm_button):button.pack(fill='x',pady=4)
         self.stop_notice=ttk.Label(motion,text='Software stop; not an emergency stop. Use the pendant for emergencies.',style='Muted.TLabel',wraplength=270)
-        self.stop_notice.pack(anchor='w',pady=(4,0)); return outer
+        self.stop_notice.pack(anchor='w',pady=4)
+        self.stack_status=tk.StringVar(value='Connecting — motion disarmed')
+        ttk.Label(motion,textvariable=self.stack_status,style='Muted.TLabel',wraplength=270).pack(anchor='w')
+        ready=self.card(outer,'Current status');ready.pack(fill='x',pady=(0,8));self.readiness={}
+        for key in ('robot','tracking'):
+            value=tk.StringVar(value='Waiting')
+            widget=ttk.Label(ready,textvariable=value,style='Card.TLabel',wraplength=270)
+            widget.pack(anchor='w',pady=5);self.readiness[key]=(value,widget)
+        self.engineering_open=tk.BooleanVar(value=False)
+        ttk.Checkbutton(outer,text='Engineering / diagnostics',variable=self.engineering_open,
+                        command=self.toggle_engineering).pack(anchor='w')
+        self.engineering_panel=self.card(outer,'Engineering tools')
+        ttk.Label(self.engineering_panel,text='Authorized commissioning personnel only. Live requires a matching evidence record.',style='Muted.TLabel',wraplength=270).pack(anchor='w')
+        buttons=ttk.Frame(self.engineering_panel,style='Card.TFrame');buttons.pack(fill='x')
+        buttons.columnconfigure((0,1),weight=1)
+        for i,(label,action,mode) in enumerate([('Preview','start',False),('Live stack','start',True),('Restart ROS','restart',None),('Stop ROS','stop',None)]):
+            ttk.Button(buttons,text=label,command=lambda a=action,m=mode:self.stack_action(a,m)).grid(row=i//2,column=i%2,sticky='ew')
+        self.servo_button=ttk.Button(self.engineering_panel,text='Start Servo (engineering)',command=lambda:self.call('servo'))
+        self.prepare_button=ttk.Button(self.engineering_panel,text='Prepare controller (engineering)',command=self.prepare_controller)
+        self.servo_button.pack(fill='x');self.prepare_button.pack(fill='x')
+        self.manual_enable_button=ttk.Button(self.engineering_panel,text='Enable (supervised commissioning)',command=self.toggle_enabled)
+        self.manual_enable_button.pack(fill='x')
+        ttk.Button(self.engineering_panel,text='Advanced diagnostics',command=self.show_history).pack(fill='x')
+        # Legacy Preview verification readback remains available to engineers.
+        for key in ('controller','joints','pose','optical','alignment','heartbeat','confirmations'):
+            value=tk.StringVar(value='Waiting');widget=ttk.Label(self.engineering_panel,textvariable=value,style='Muted.TLabel',wraplength=270)
+            self.readiness[key]=(value,widget)
+        return outer
+
+    def toggle_engineering(self):
+        if self.engineering_open.get():self.engineering_panel.pack(fill='x',pady=4)
+        else:self.engineering_panel.pack_forget()
 
     def monitoring(self,parent):
         outer=ttk.Frame(parent,style='App.TFrame'); camera=self.card(outer,'Camera / visualization'); camera.pack(fill='x',pady=(0,8))
@@ -151,7 +176,7 @@ class OperatorGUI:
         self.optical=tk.BooleanVar(value=False)
         for text,variable in [('Mapping directions and tool0 verified in Preview',self.alignment),
                               ('Optical loss tested with controllers inactive',self.optical)]:
-            ttk.Checkbutton(self.advanced_body,text=text,variable=variable,command=self.mark_dirty).pack(anchor='w',pady=3)
+            ttk.Checkbutton(self.engineering_panel,text=text,variable=variable,command=self.mark_dirty).pack(anchor='w',pady=3)
         self.bind_scroll(self.advanced_body)
         self.bind_scroll(self.canvas)
         return outer
@@ -210,6 +235,10 @@ class OperatorGUI:
             return
         new=value['session_id']!=self.session
         if new:
+            if self.session is not None:
+                self.stop_teleop()
+                self.startup.message='ROS session changed — press START TELEOP'
+            self.uncertain_enable_session=None
             self.cancel_requests()
             self.generation+=1
             self.session=value['session_id']
@@ -306,12 +335,13 @@ class OperatorGUI:
         window.title('Recent operator actions (last 40)')
         text=tk.Text(window,width=100,height=20,wrap='word')
         text.pack(fill='both',expand=True)
-        text.insert('end','Current blockers:\n'+str(self.last_status.get('blockers','Unavailable'))+'\n\nRecent actions:\n'+'\n'.join(self.notifications.history))
+        text.insert('end','Backend status:\n'+json.dumps(self.last_status,indent=2)+'\n\nCurrent blockers:\n'+str(self.last_status.get('blockers','Unavailable'))+'\n\nRecent actions:\n'+'\n'.join(self.notifications.history))
         text.configure(state='disabled')
 
     def stack_action(self,action,mode=None):
         if not self.process_worker or self.closed:
             return
+        if action != 'rviz':self.stop_teleop()
         if self.process_worker.submit(action,mode):
             self.heartbeat.publish(Bool(data=False))
             self.notify('ROS '+action+' requested; waiting for process manager')
@@ -327,6 +357,7 @@ class OperatorGUI:
         return any(name==label for name,_ in self.pending)
 
     def prepare_controller(self):
+        if getattr(self,'startup',None) and self.startup.requested:return
         d=self.last_status
         if self.stale() or d.get('armed') is not False or d.get('a_held') is not False or d.get('enable_requested') is not False:
             self.notify('Disable teleop and release A before preparing the controller.',True);return
@@ -349,6 +380,7 @@ class OperatorGUI:
         self.notify('Preparing scaled controller; teleop remains disabled.')
 
     def call(self,name):
+        if name=='servo' and getattr(self,'startup',None) and self.startup.requested:return
         if self.request_busy(name):return
         if not self.clients[name].service_is_ready():
             self.notify(f'{name}: service unavailable',True);return
@@ -358,10 +390,83 @@ class OperatorGUI:
         except Exception as error:
             self.notify(f'{name}: {error}',True)
 
+    def start_teleop(self):
+        if self.retiring_startup or self.startup_request or self.uncertain_enable_session == self.session and self.session is not None:
+            self.notify('Waiting for canceled startup to retire. An enable timeout requires Restart ROS.',True)
+            return
+        if self.pending or self.parameters.pending:
+            self.notify('Wait for the current engineering/settings request to finish.',True)
+            return
+        if self.startup.start(self.session):
+            self.heartbeat_allowed=True
+
+    def stop_teleop(self):
+        self.startup.stop()
+        # A canceled Future cannot cancel a request already executing at the server.
+        # Withhold heartbeat until it retires, then send disarm again.
+        self.heartbeat_allowed=False
+        self.heartbeat.publish(Bool(data=False))
+        self.retiring_startup=self.startup_request is not None
+        self.call('disarm')
+
+    def poll_startup(self, now):
+        request=self.startup_request
+        if request is not None:
+            action,future,client,started,generation=request
+            if future.done() or now-started>=5:
+                success=False;detail='service timeout; outcome unknown'
+                try:
+                    if future.done():
+                        result=future.result()
+                        success=bool(result.ok if action=='prepare' else result.success)
+                        detail=getattr(result,'message','Controller activation rejected')
+                    elif action=='enable' and generation==self.generation:
+                        self.uncertain_enable_session=self.session
+                except Exception as error:
+                    detail=str(error)
+                    if action=='enable' and generation==self.generation:self.uncertain_enable_session=self.session
+                if not future.done():future.cancel()
+                client.remove_pending_request(future)
+                self.startup_request=None
+                if generation==self.generation and not self.retiring_startup:
+                    self.startup.acknowledge(action,success,detail,now)
+                else:
+                    self.retiring_startup=False
+                    self.call('disarm')
+        action=self.startup.step(self.last_status,not self.stale(),now)
+        if self.startup.state=='ERROR':
+            if self.heartbeat_allowed:
+                self.heartbeat_allowed=False
+                self.heartbeat.publish(Bool(data=False))
+                self.call('disarm')
+            return
+        if action:
+            client={'prepare':self.switch_client,'servo':self.clients['servo'],'enable':self.enable_client}[action]
+            if not client.service_is_ready():
+                self.startup.acknowledge(action,False,action+' service unavailable',now)
+                self.heartbeat_allowed=False
+                self.heartbeat.publish(Bool(data=False))
+                self.call('disarm')
+                return
+            if action=='prepare':
+                req=SwitchController.Request();req.activate_controllers=['scaled_joint_trajectory_controller']
+                req.strictness=req.STRICT;req.timeout.sec=3
+            elif action=='enable':req=SetBool.Request(data=True)
+            else:req=Trigger.Request()
+            try:
+                self.startup_request=(action,client.call_async(req),client,now,self.generation)
+            except Exception as error:
+                self.startup.acknowledge(action,False,str(error),now)
+
     def toggle_enabled(self):
+        if self.startup.requested:return
+        if self.last_status.get('engineering_required') is not False:
+            self.notify('Use START TELEOP; manual Enable requires an explicit engineering session.',True);return
         if self.request_busy('enable'):return
         if self.stale() or boolean(self.last_status,'enable_requested') is None or not self.enable_client.service_is_ready():
             self.notify('Enable service/status unavailable',True);return
+        self.heartbeat_allowed=True
+        self.heartbeat.publish(Bool(data=True))
         r=SetBool.Request();r.data=not self.last_status['enable_requested']
         try:
             self.track_request('enable',self.enable_client.call_async(r),r.data)
@@ -497,7 +602,8 @@ class OperatorGUI:
 
     def update_dashboard(self,stale,d):
         if stale:
-            self.header_mode.set('DISCONNECTED');self.header_state.set('UNKNOWN')
+            self.header_mode.set('DISCONNECTED');self.header_state.set('CONNECTING')
+            self.stack_status.set('Waiting for backend / motion status unavailable')
             self.header_badge.configure(fg=COLORS['muted'])
             self.live_message.set('No fresh backend status. Do not infer robot state; check the pendant.')
             self.diagnostics.set('Diagnostics: Stale / Unavailable')
@@ -506,18 +612,19 @@ class OperatorGUI:
             for key in self.readiness:self.set_ready(key,None,'Unknown / status unavailable')
             return
         mode=str(d.get('mode','UNKNOWN'))
+        self.stack_status.set('Live stack connected' if mode.startswith('LIVE') else 'Engineering Preview connected')
         self.header_mode.set('LIVE' if mode.startswith('LIVE') else 'PREVIEW' if 'DRY RUN' in mode else mode)
         ready=boolean(d,'motion_ready');armed=boolean(d,'armed')
         if any(boolean(d,key) is None for key in ('armed','enable_requested','alignment_verified','optical_loss_test_verified','operator_heartbeat_fresh')):
             ready=armed=None
-        self.header_state.set('ARMED' if armed is True else 'READY' if ready is True else 'READINESS UNCONFIRMED' if ready is None else 'NOT READY')
+        self.header_state.set('TELEOP ACTIVE' if armed is True and d.get('clutch')=='ACTIVE' else 'READY' if armed is True and ready is True else 'WAITING')
         fault=boolean(d,'servo_status_fresh') is True and type(d.get('servo')) is int and d['servo'] in (2,4,5)
-        if fault:self.header_state.set('SERVO HALT')
+        if fault:self.header_state.set('FAULT')
         self.header_badge.configure(fg=COLORS['red'] if fault else COLORS['amber'] if self.pending else COLORS['green'] if ready is True else COLORS['blue'] if 'DRY RUN' in mode else COLORS['amber'] if ready is False else COLORS['muted'])
         blockers=d.get('blockers')
         blockers=blockers if isinstance(blockers,list) and all(isinstance(x,str) for x in blockers) else []
         self.live_message.set(blockers[0] if blockers else str(d.get('reason','Readiness not yet confirmed')))
-        for key,source,title in [('robot','robot_ready','Robot / External Control'),('controller','controller_ready','Controller ownership'),('joints','observations_healthy','Overall observations'),('pose','pose_fresh','Controller pose fresh'),('optical','optical','Optical signal (not pose proof)'),('heartbeat','operator_heartbeat_fresh','Backend heartbeat')]:
+        for key,source,title in [('robot','robot_ready','Robot / External Control'),('controller','controller_ready','Controller ownership'),('joints','observations_healthy','Joint / TF observations'),('pose','pose_fresh','Controller pose fresh'),('optical','optical','Optical signal (not pose proof)'),('heartbeat','operator_heartbeat_fresh','Backend heartbeat')]:
             ok=boolean(d,source)
             if key=='controller' and boolean(d,'controller_state_fresh') is not True:
                 ok=None
@@ -529,10 +636,21 @@ class OperatorGUI:
             self.set_ready(key,ok,label+': '+text)
         diag=d.get('velocity_diagnostics')
         a_text={True:'held',False:'released',None:'Unknown'}[boolean(d,'a_held')]
-        pose_text={True:'yes',False:'no',None:'Unknown'}[boolean(d,'pose_fresh')]
         servo=d.get('servo_detail','Unavailable') if boolean(d,'servo_status_fresh') is True else 'Stale / Unavailable'
         self.diagnostics.set('Published TCP command: '+vector_text(vector(diag,'published_twist'))+'\nMeasured TCP estimate (TF): '+vector_text(vector(diag,'measured_tcp_velocity'))+f"\nServo: {servo}\nClutch: {d.get('clutch','Unavailable')} | A: {a_text}")
-        self.lighthouse.set('Lighthouse 0: '+station_text(d,0)+'\nLighthouse 1: '+station_text(d,1)+f"\nPose fresh: {pose_text} (either station supported)\nLast rejection: {d.get('tracking_rejection','Unavailable')}")
+        tracking=boolean(d,'tracking_valid')
+        count=d.get('active_station_count')
+        tracking_text=('TRACKING VALID — '+str(count)+' LIGHTHOUSE'+('S' if count!=1 else '')) if tracking is True and type(count) is int and count>0 else 'TRACKING: LOST' if self.startup.enabled else 'TRACKING: WAITING'
+        self.lighthouse.set(tracking_text)
+        self.set_ready('tracking',tracking,tracking_text)
+        robot=boolean(d,'robot_preparation_ready')
+        robot_fault=boolean(d,'robot_fault') is True
+        self.set_ready('robot',robot,'ROBOT: FAULT' if robot_fault else 'ROBOT: READY' if robot is True else 'ROBOT: WAITING')
+        if robot_fault:self.header_state.set('FAULT')
+        if self.startup.requested or self.startup.state=='ERROR' or not self.heartbeat_allowed:
+            self.live_message.set(self.startup.message)
+        if self.startup.state=='ERROR':self.header_state.set('FAULT')
+        elif not fault and not robot_fault and self.startup.enabled and tracking is False:self.header_state.set('TRACKING LOST')
         self.motion.set(motion_text(d))
 
     def poll(self):
@@ -549,30 +667,29 @@ class OperatorGUI:
             except queue.Empty:pass
         now=time.monotonic()
         if now-self.heartbeat_at>=.1:
-            self.heartbeat.publish(Bool(data=True));self.heartbeat_at=now
+            self.heartbeat.publish(Bool(data=self.heartbeat_allowed));self.heartbeat_at=now
         self.finish_requests()
         self.check_readback(now)
+        self.poll_startup(now)
         self.camera_status.set(self.camera_text if now-self.camera_at<4 else 'D405 unavailable / no recent status (teleop unaffected)')
         stale,d=self.stale(),self.last_status
         self.update_dashboard(stale,d)
         self.mark_dirty()
         self.message.set(self.notifications.text(now))
         busy=self.request_busy('enable') or self.request_busy('prepare_controller')
-        disabled=stale or d.get('armed') is not False or d.get('a_held') is not False
+        disabled=stale or d.get('armed') is not False or d.get('a_held') is not False or self.startup.requested
         for b in (self.apply_button,self.save_button):b.state(['disabled'] if disabled or self.parameters.pending else ['!disabled'])
         self.revert_button.state(['disabled'] if stale or not self.parameters.confirmed or self.parameters.pending else ['!disabled'])
         self.reset_button.state(['disabled'] if self.parameters.pending else ['!disabled'])
-        self.enable_button.state(['disabled'] if stale or busy else ['!disabled'])
-        enabled=boolean(d,'enable_requested')
-        label='DISABLE TELEOP' if enabled is True and not stale else 'ENABLE TELEOP'
-        for name,future in self.pending:
-            if name=='enable':label='ENABLING...' if self.request_meta[future][2] else 'DISABLING...'
-        self.enable_button.configure(text=label)
-        self.servo_button.state(['disabled'] if stale or d.get('armed') or self.request_busy('servo') else ['!disabled'])
-        self.prepare_button.state(['disabled'] if disabled or d.get('enable_requested') or busy else ['!disabled'])
+        self.enable_button.state(['disabled'] if self.startup.requested or self.retiring_startup or self.startup_request else ['!disabled'])
+        self.enable_button.configure(text='START TELEOP')
+        self.servo_button.state(['disabled'] if stale or d.get('armed') or self.request_busy('servo') or self.startup.requested else ['!disabled'])
+        self.prepare_button.state(['disabled'] if disabled or d.get('enable_requested') or busy or self.startup.requested else ['!disabled'])
         hardware=d.get('hardware_smoothing') if not stale else None
         limit=hardware.get('velocity') if isinstance(hardware,dict) else None
-        self.active_limit.set('Active final joint limit: '+(f'{limit:g} rad/s' if type(limit) in (float,int) and math.isfinite(limit) else 'Unavailable')+('\nSaved for restart: '+str(self.parameters.restart['max_joint_speed_rad_s'])+' rad/s' if self.parameters.restart else ''))
+        self.manual_enable_button.state(['!disabled'] if not stale and d.get('engineering_required') is False and not self.startup.requested else ['disabled'])
+        effective=d.get('effective_parameters',{}) if not stale else {}
+        self.active_limit.set('Effective TCP caps: '+str(effective.get('max_linear_speed_m_s','?'))+' m/s; '+str(effective.get('max_angular_speed_deg_s','?'))+' deg/s\nActive final joint limit: '+(f'{limit:g} rad/s' if type(limit) in (float,int) and math.isfinite(limit) else 'Unavailable')+('\nSaved for restart: '+str(self.parameters.restart['max_joint_speed_rad_s'])+' rad/s' if self.parameters.restart else ''))
         blockers=d.get('blockers',[])
         text='Status unavailable' if stale else '\n'.join(str(x) for x in blockers) if isinstance(blockers,list) else 'Blocker details unavailable'
         if self.blockers.get('1.0','end-1c')!=text:
@@ -582,10 +699,14 @@ class OperatorGUI:
     def close(self):
         if self.closed:return
         self.closed=True
-        if getattr(self,'process_worker',None):self.process_worker.close()
-        if hasattr(self,'request_meta'):self.cancel_requests()
-        if getattr(self,'camera_window',None) is not None:self.camera_window.close()
         try:
+            if getattr(self,'startup',None):self.startup.stop()
+            if getattr(self,'startup_request',None):
+                _,future,client,_,_=self.startup_request
+                future.cancel();client.remove_pending_request(future)
+            if getattr(self,'process_worker',None):self.process_worker.close()
+            if hasattr(self,'request_meta'):self.cancel_requests()
+            if getattr(self,'camera_window',None) is not None:self.camera_window.close()
             if rclpy.ok():self.heartbeat.publish(Bool(data=False))
         finally:self.root.destroy()
 

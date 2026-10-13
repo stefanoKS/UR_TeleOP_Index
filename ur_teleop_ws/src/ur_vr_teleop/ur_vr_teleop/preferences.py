@@ -206,8 +206,19 @@ def load_settings_with_sources(config):
     return settings, sources
 
 
+def installation_root(config):
+    # Separate low-speed profiles may live outside the repository.
+    candidates = [Path(config).resolve().parent, *Path(config).resolve().parents,
+                  *Path(__file__).resolve().parents]
+    return next((p for p in candidates if (p/'dependencies.repos').is_file()),
+                Path(config).resolve().parent.parent.parent)
+
+
 def write_effective_snapshot(config, directory):
     settings, sources = load_settings_with_sources(config)
+    # Preserve installation identity and record location through the immutable snapshot.
+    settings.setdefault('engineering_installation', str(installation_root(config)))
+    settings.setdefault('engineering_record_path', str(Path(config).resolve().with_name('engineering_record.json')))
     settings['effective_sources'] = sources
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

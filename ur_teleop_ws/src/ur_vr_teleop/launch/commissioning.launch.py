@@ -16,7 +16,7 @@ def nodes(context):
     if os.environ.get('ROS_DOMAIN_ID') != '43':
         raise RuntimeError('Commissioning requires ROS_DOMAIN_ID=43')
     config = Path(LaunchConfiguration('config_file').perform(context)).expanduser()
-    from ur_vr_teleop.preferences import load_settings_with_sources
+    from ur_vr_teleop.preferences import load_settings_with_sources, installation_root
     settings, sources = load_settings_with_sources(config)
     for key, source in sources.items():
         value = settings['robot'][key[6:]] if key.startswith('robot.') else settings['teleop'][key]
@@ -61,6 +61,15 @@ def nodes(context):
     validate({key: settings['teleop'][key] for key in DEFAULTS})
     teleop = settings['teleop'].copy()
     teleop['motion_output_enabled'] = motion == 'true'
+    from ur_vr_teleop.engineering import context as engineering_context
+    from launch_ros.parameter_descriptions import ParameterValue
+    engineering_session = LaunchConfiguration('engineering_session', default='false').perform(context)
+    if engineering_session not in ('true', 'false'):
+        raise RuntimeError('engineering_session must be true or false')
+    teleop['engineering_required'] = motion == 'true' and engineering_session != 'true'
+    teleop['engineering_context'] = ParameterValue(engineering_context(settings,
+        settings.get('engineering_installation', str(installation_root(config))),
+        settings.get('engineering_record_path', str(config.resolve().with_name('engineering_record.json')))), value_type=str)
     return [
         Node(package='moveit_servo', executable='servo_node_main', name='servo_node', namespace='vr_real',
              parameters=[{'robot_description': xml, 'robot_description_semantic': semantic,
@@ -79,6 +88,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('config_file', default_value=str(Path.home() / 'Documents/Teleop/ur_teleop/config/real_teleop.yaml')),
         DeclareLaunchArgument('motion_output_enabled', default_value='false'),
+        DeclareLaunchArgument('engineering_session', default_value='false'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
         OpaqueFunction(function=nodes),
     ])

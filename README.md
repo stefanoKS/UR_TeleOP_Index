@@ -1,3 +1,5 @@
+> **V4 operator workflow:** Open the app → **START TELEOP** → wait for **READY** → hold A to move. Release A to stop; **STOP TELEOP** disarms. Routine Live operation requires a matching, unexpired [engineering record](docs/COMMISSIONING.md#v4-engineering-record). No record has been created or physical validation performed by this software change.
+
 # UR10e Valve Index teleoperation
 
 This project maps a Valve Index controller's translation and rotation to a Universal Robots UR10e through ROS 2 Humble. A desktop panel manages tracking, robot connection, commissioning checks, and an A-button clutch. It is an engineering teleoperation application with software safeguards; deployment still requires supervised hardware commissioning.
@@ -63,12 +65,12 @@ After installation, use the existing **UR10e Teleop** desktop shortcut, if insta
 ~/Documents/Teleop/ur_teleop/start_teleop.sh
 ```
 
-1. The managed desktop starts **Preview** by default. It connects the driver and starts tracking, but the teleop node cannot publish robot motion commands. This is not hardware-free simulation.
-2. With A released and motion controllers inactive, check pose freshness, optical tracking, measured joints, `tool0`, and all three mapped movement directions. Complete [commissioning](docs/COMMISSIONING.md) before live operation.
-3. Select position or velocity mode and review effective limits in Quick tuning; advanced settings remain in the same window. Apply changes while disarmed with A released. Joint-speed changes require a stack restart.
-4. For an authorized physical session, select **Live setup**. Run the prepared External Control program on the pendant. Use **Start Servo solver** and **Prepare controller** as indicated by the panel, then complete the session confirmations.
-5. Select **Enable teleop** only when readiness checks pass. Release A, then press and hold it to establish a new reference and command motion.
-6. Release A for a normal stop; use **DISARM TELEOP** to clear enable intent. Use the pendant emergency stop for an emergency. **Stop ROS** shuts down the managed stack; close the desktop afterward.
+1. The managed desktop starts **Live, motion disarmed**, with the motion controller inactive.
+2. With a previously commissioned installation and matching V4 record, press **START TELEOP** once with A released.
+3. Follow any pendant instruction to run External Control; wait for **READY — PRESS A TO MOVE**. Controller and Servo preparation happen automatically after their prerequisites.
+4. Hold A to move; release A to request a controlled stop.
+5. Press **STOP TELEOP** to clear enable intent. Engineering Preview and the old supervised workflow remain under explicit engineering controls; see [Operation](docs/OPERATION.md).
+
 
 For tracking alone, without starting the driver or teleoperation:
 
@@ -138,3 +140,5 @@ The active ROS workspace is `ur_teleop_ws`; the old duplicate runtime build was 
 Historical design/session records are retained: [V2 notes](ur_teleop/TELEOP_V2.md), [teleop update](ur_teleop/TELEOP_UPDATE_20260924.md), [damping](ur_teleop/DAMPING_UPDATE_20260924.md), [state and camera](ur_teleop/DIRECT_STATE_AND_D405_20260924.md), [joint smoothing](ur_teleop/FINAL_COMMAND_SMOOTHING.md), [motion review](ur_teleop/SMOOTH_MOTION_REVIEW.md), and [old project status](ur_calibration_fix_ws/PROJECT_STATUS.md). They describe earlier states and may contain obsolete paths, two-station requirements, or limits. Current source and the guides above take precedence.
 
 Dashboard status fields and parameter synchronization are documented in the [operator-status contract](docs/OPERATOR_STATUS.md).
+
+[V4 implementation, validation, screenshots and rollback](docs/V4_STARTUP_REPORT.md).

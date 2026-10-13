@@ -21,6 +21,11 @@
     "vr_rotation_deadband_deg": 10.0,
     "translation_damping_gain": 0.5,
     "rotation_damping_gain": 0.5,
-    "damping_velocity_filter_s": 0.2
+    "damping_velocity_filter_s": 0.2,
+    "teleop_control_mode": "velocity",
+    "tracking_station_policy": "any_station",
+    "linear_velocity_filter_s": 0.04,
+    "angular_velocity_filter_s": 0.04,
+    "single_station_motion_scale": 1.0
   }
 }

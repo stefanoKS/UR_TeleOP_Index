@@ -205,8 +205,41 @@ robot:
 
 It checks Apply/Save/rejection/readback/conflicts, session changes, stale status,
 mode visibility, restart staging and close. It captures actual window images at
-1440×900, 1366×768 and 1280×720 under `/tmp/ur_teleop_ui_v3_1/`. A working X display
+1440×900, 1366×768 and 1280×720 under `/tmp/ur_teleop_ui_v4/`. A working X display
 is required (or run under Xvfb). Pure `test_dashboard_state.py` and
 `test_dashboard_async.py` cover normalized diffs, malformed telemetry,
 notification lifetime, process ownership serialization and request failures.
 Physical commissioning remains a separate supervised activity.
+
+## V4 engineering record
+
+A software upgrade does **not** approve the current workcell or its saved high limits. There is intentionally no committed valid record. The first V4 deployment requires an authorized engineer to review the replacement commissioning model and complete supervised physical validation. Automated regressions do not prove stopping distance or tracking occlusion behavior.
+
+1. Select a separate configuration and adjacent preferences with site-validated low initial limits; do not silently overwrite the operator profile. Confirm actual effective limits, TCP/payload, workspace/collision model, robot calibration and tracking-to-robot transform.
+2. Launch `ur_teleop/start_teleop.sh --preview --engineering-session --config /absolute/path/to/config.yaml`. Keep controllers inactive for Preview mapping and optical-loss checks. The explicit engineering session retains the original session confirmation blockers and manual controls under Engineering; it is the supervised path for initial physical validation before a routine-use record exists.
+3. Under the site's authorized physical test plan, switch that managed session to Live, verify/apply the legacy confirmations, prepare the controller, start Servo, and manually Enable. Validate the requested modes, approved speed/acceleration/ratio envelope, command ownership and limits, clutch release, optical loss, fresh-clutch recovery, STOP during preparation, faults, and actual stopping behavior. Test each approved mode separately. Never inject healthy mock status into the real domain.
+4. Save a durable commissioning report identifying the engineer, workcell, date, physical tests and results, approved envelope, TCP/payload, collision model, periodic review date, and V4 startup/safeguard review. Record physical station moves or tool changes administratively even when no file changes: software cannot detect them.
+5. Only after sign-off, close the supervised session and record that evidence using the installed tool in a sourced ROS terminal. Substitute actual identities and a site-selected future expiration; this example is not a preapproved record:
+
+```bash
+ros2 run ur_vr_teleop engineering_record \
+  --config /absolute/path/to/config.yaml \
+  --root /home/ubuntu-ros/Documents/Teleop \
+  --engineer 'AUTHORIZED ENGINEER' --workcell 'WORKCELL ID' \
+  --evidence /absolute/path/to/signed-off-report.pdf \
+  --valid-until 'YYYY-MM-DDTHH:MM:SS+09:00' \
+  --approved-modes velocity \
+  --attest-workcell-validated
+```
+
+Include `position` in `--approved-modes` only if independently validated. The tool records evidence; it does not run or certify a physical test. It writes `engineering_record.json` adjacent to the selected original YAML, atomically with owner-only permissions. Restrict write access to the configuration/evidence directory to authorized engineering personnel through workstation permissions. This is a local administrative trust boundary, not a cryptographic signature or role-authentication system.
+
+The record binds installation path and host, robot address and calibration digest, controller serial, tracking calibration digest (`~/.config/libsurvive/config.json`), frame mapping, other fixed tuning, source/dependency/template digests, evidence digest, approved modes, and limit envelope. Linear/angular/joint speeds, Cartesian accelerations and stored translation/rotation scales may be reduced within that envelope. Raising them, selecting an unapproved mode, changing mapping, filters, calibration, software, or other identity fields requires new engineering review. File restoration to the approved identity restores eligibility; no automatic motion follows.
+
+Runtime changes invalidate cached verification immediately until checked. Evidence files are revalidated in a background worker at approximately 0.5-second intervals; results older than two seconds block readiness. Deletion, expiry, malformed data or I/O errors fail closed. The snapshot preserves the original installation/record paths; it does not reload mutable operator preferences. No record is enable intent: every new session remains disabled and needs START.
+
+6. Return to the normal launcher (without `--engineering-session`), press START once and check progress to actual READY with A released. Exercise the V4 startup/STOP acceptance matrix within the supervised plan. Routine operation may then use the approved unchanged installation. Revoke the record and repeat review when the physical workcell changes.
+
+### V4 software validation
+
+`test_startup.py` tests asynchronous stage ordering, acknowledgments/readback, idempotency, missing prerequisites, failures/timeouts, STOP races, session retirement and tracking recovery. `test_engineering.py` uses synthetic evidence only. The isolated ROS checks ensure legacy flags cannot satisfy record-required readiness and that optical loss and mapping invalidation remain effective. `gui_render_check.py` additionally uses real ROS services with a synthetic backend to test one-button preparation, duplicate Start, STOP, and reuse of active components. Screenshots from this check are simulated telemetry, not a robot commissioning result.

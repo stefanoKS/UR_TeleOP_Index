@@ -847,3 +847,62 @@ def test_dashboard_readback_and_confirmations_match_actual_backend(node):
     assert not payload['alignment_verified']  # Parameter bool alone would still be true.
     assert node.get_parameter('alignment_verified').value
     assert node.command_pub is None
+
+
+def test_v4_live_record_is_required_even_with_legacy_flags(node):
+    healthy(node)
+    node.engineering_required = True
+    assert node.get_parameter('alignment_verified').value
+    assert node.get_parameter('optical_loss_test_verified').value
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
+    assert any('ENGINEERING SETUP REQUIRED' in reason for reason in node.reasons())
+
+
+def test_v4_verified_record_does_not_require_session_flags_and_runtime_checks_remain(node):
+    healthy(node)
+    node.set_parameters_atomically([Parameter('alignment_verified', value=False),
+                                    Parameter('optical_loss_test_verified', value=False)])
+    node.engineering_required = True
+    node.engineering_valid = True  # Mock evidence boundary only; no driver/publisher.
+    node.engineering_checked = time.monotonic()
+    node.engineering_parameters = node.engineering_values()
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    node.on_optical(Bool(data=False))
+    assert not node.gate.armed
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
+
+
+def test_v4_runtime_mapping_change_immediately_invalidates_record(node):
+    healthy(node)
+    node.engineering_required = True
+    node.engineering_valid = True
+    node.engineering_checked = time.monotonic()
+    node.engineering_parameters = node.engineering_values()
+    assert node.engineering_ready()
+    result=node.set_parameters_atomically([Parameter('tracking_to_robot_rpy_deg',value=[0.,0.,40.])])
+    assert result.successful and not node.engineering_ready()
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
+
+
+@pytest.mark.parametrize('station', ['LH0=1 LH1=0','LH0=0 LH1=1','LH0=1 LH1=1'])
+def test_v4_tracking_indicator_requires_pose_not_just_optical(node,station):
+    healthy(node)
+    node.on_optical_detail(String(data=station))
+    assert node.tracking_valid()
+    node.pose_ok=False
+    assert not node.tracking_valid()
+
+
+def test_v4_native_limit_mismatch_is_not_hidden_by_record(node):
+    healthy(node)
+    node.engineering_required=True
+    node.engineering_valid=True
+    node.engineering_checked=time.monotonic()
+    node.engineering_parameters=node.engineering_values()
+    node.engineering=SimpleNamespace(context={'settings':{'teleop':{'max_joint_speed_rad_s':.5},
+        'robot':{'joint_command_acceleration_rad_s2':1.,'joint_command_jerk_rad_s3':10.}}})
+    assert node.engineering_controller_matches()
+    node.hardware_smoothing['jerk']=100.
+    assert not node.engineering_controller_matches()
+    assert any('Effective native smoothing limits differ' in r for r in node.reasons())
+    assert not node.arm(Trigger.Request(),Trigger.Response()).success

@@ -162,7 +162,7 @@ class ProcessManager:
                          '-p', 'device_serial:=LHR-4632363E'],
             'teleop': ['ros2', 'launch', 'ur_vr_teleop', 'commissioning.launch.py',
                         'config_file:='+str(snapshot), 'motion_output_enabled:='+str(live).lower(),
-                        'launch_rviz:=false'],
+                        'launch_rviz:=false', 'engineering_session:='+str(getattr(self, 'engineering_session', False)).lower()],
             'rviz': self.rviz_command(),
         }
         camera = settings.get('camera', {})
@@ -343,11 +343,18 @@ class ProcessManager:
         self.signal_groups(signal.SIGKILL)
 
 
-def main(args=None):
+def parse_options(args=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--live', action='store_true', help='Live command path, still starts disabled/inactive')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--live', dest='live', action='store_true', default=True, help='Live stack (default), still disarmed/inactive')
+    mode.add_argument('--preview', dest='live', action='store_false', help='Engineering Preview, no final motion publisher')
+    parser.add_argument('--engineering-session', action='store_true', help='Authorized supervised commissioning: retain legacy session confirmations and manual Enable')
     parser.add_argument('--config', default=str(Path.home()/'Documents/Teleop/ur_teleop/config/real_teleop.yaml'))
-    options = parser.parse_args(args)
+    return parser.parse_args(args)
+
+
+def main(args=None):
+    options = parse_options(args)
     root = Path.home()/'Documents/Teleop/ur_teleop'
     lock = (root/'.desktop.lock').open('a')
     try:
@@ -361,6 +368,7 @@ def main(args=None):
     from rclpy.signals import SignalHandlerOptions
     rclpy.init(args=[], signal_handler_options=SignalHandlerOptions.NO)
     manager = ProcessManager(options.config)
+    manager.engineering_session = options.engineering_session
     gui = None
     try:
         gui = OperatorGUI(manager=manager)

@@ -14,5 +14,6 @@ setup(
     description='Guarded UR10e teleop commissioning and local GUI', license='MIT',
     entry_points={'console_scripts': ['preview = ur_vr_teleop.preview:main',
         'commissioning = ur_vr_teleop.commissioning:main', 'gui = ur_vr_teleop.gui:main',
-        'desktop = ur_vr_teleop.desktop:main']},
+        'desktop = ur_vr_teleop.desktop:main',
+        'engineering_record = ur_vr_teleop.engineering:main']},
 )
