@@ -22,7 +22,7 @@
     "translation_damping_gain": 0.0,
     "rotation_damping_gain": 0.0,
     "damping_velocity_filter_s": 0.05,
-    "teleop_control_mode": "position",
+    "teleop_control_mode": "velocity",
     "tracking_station_policy": "any_station",
     "linear_velocity_filter_s": 0.04,
     "angular_velocity_filter_s": 0.04,
