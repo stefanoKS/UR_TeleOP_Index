@@ -66,7 +66,8 @@ def nodes(context):
     engineering_session = LaunchConfiguration('engineering_session', default='false').perform(context)
     if engineering_session not in ('true', 'false'):
         raise RuntimeError('engineering_session must be true or false')
-    teleop['engineering_required'] = motion == 'true' and engineering_session != 'true'
+    # engineering_session is accepted for CLI compatibility; it grants no bypass.
+    settings['effective_sources'] = sources
     teleop['engineering_context'] = ParameterValue(engineering_context(settings,
         settings.get('engineering_installation', str(installation_root(config))),
         settings.get('engineering_record_path', str(config.resolve().with_name('engineering_record.json')))), value_type=str)

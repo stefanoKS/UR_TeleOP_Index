@@ -37,14 +37,14 @@ def run():
         return dict(session_id=session[0],mode='DRY RUN — ROBOT OUTPUT DISABLED',
             armed=False,a_held=False,enable_requested=False,observations_healthy=True,
             robot_ready=True,controller_ready=True,controller_state_fresh=True,servo_status_fresh=True,
-            motion_ready=False,operator_heartbeat_fresh=True,
+            motion_ready=False,operator_heartbeat_fresh=True,configuration_ready=True,
             alignment_verified=backend.get_parameter('alignment_verified').value,
             optical_loss_test_verified=backend.get_parameter('optical_loss_test_verified').value,
             effective_parameters={k:list(backend.get_parameter(k).value) if isinstance(v,list) else backend.get_parameter(k).value for k,v in DEFAULTS.items()},
             hardware_smoothing={'velocity':.5},optical=True,optical_stations={'0':0,'1':1},pose_fresh=True,
             tracking_rejection='none',servo_detail='Ready',clutch='READY',teleop_control_mode='velocity',
             velocity_diagnostics={'published_twist':[0.]*6,'measured_tcp_velocity':None},
-            motion_metrics_current=False,blockers=['Confirm mapping and optical-loss test'],reason='Disarmed')
+            motion_metrics_current=False,blockers=['External Control program is not running'],reason='Disarmed')
     def pump(seconds=.4,publish=True):
         until=time.monotonic()+seconds
         while time.monotonic()<until:
@@ -69,7 +69,7 @@ def run():
         pump()
         assert gui.parameters.effective['max_linear_speed_m_s']==.2
         assert gui.unsaved.get()=='No pending edits'
-        assert 'Verified' in gui.readiness['alignment'][0].get()
+        assert not backend.get_parameter('alignment_verified').value  # Tuning no longer sends approvals.
         assert json.loads((Path(temporary.name)/'operator_settings.json').read_text())['parameters']['max_linear_speed_m_s']==.2
         result=gui.message.get();pump()
         assert result==gui.message.get() and 'confirmed' in result
@@ -150,7 +150,7 @@ def run():
         original_status=status
         def status():
             return dict(original_status(),**dict(state,mode='LIVE OUTPUT',tracking_valid=True,
-                active_station_count=1,engineering_verified=True,robot_preparation_ready=True,
+                active_station_count=1,configuration_ready=True,robot_preparation_ready=True,
                 stationary=True,a_held=False,blockers=[],reason='Synthetic backend — no robot connected'))
         def prepare(req,res):
             assert req.activate_controllers==['scaled_joint_trajectory_controller'] and not req.deactivate_controllers
@@ -209,7 +209,16 @@ def run():
             ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'dashboard-{width}x{height}-advanced.png')
             gui.advanced_open.set(False);gui.toggle_advanced();pump(.1)
             ImageGrab.grab(bbox=(x,y,x+width,y+height)).save(output/f'dashboard-{width}x{height}.png')
-        # First-launch setup opens only after backend verification has completed.
+        # Recording controls are read-only and available while the main STOP stays visible.
+        gui.engineering_open.set(True);gui.toggle_engineering();pump(.2)
+        gui.show_history();pump(.2)
+        windows=[w for w in gui.root.winfo_children() if w.winfo_class()=='Toplevel']
+        diagnostics=next(w for w in windows if w.title()=='Advanced diagnostics / recent operator actions')
+        x,y=diagnostics.winfo_rootx(),diagnostics.winfo_rooty()
+        ImageGrab.grab(bbox=(x,y,x+diagnostics.winfo_width(),y+diagnostics.winfo_height())).save(output/'sway-diagnostics.png')
+        diagnostics.destroy()
+        gui.engineering_open.set(False);gui.toggle_engineering()
+        # Missing historical setup never opens the optional wizard.
         assert gui.setup_wizard is None
         previous_status = status
         setup_state = dict(engineering_required=True, engineering_verified=True,
@@ -227,6 +236,8 @@ def run():
         assert gui.setup_wizard is None
         setup_state['setup_checked'] = True
         pump(.3)
+        assert gui.setup_wizard is None  # Missing history never opens a wizard.
+        gui.open_setup()  # Optional engineering tool is explicit.
         assert gui.setup_wizard is not None
         wizard = gui.setup_wizard
         assert not wizard.checks.results

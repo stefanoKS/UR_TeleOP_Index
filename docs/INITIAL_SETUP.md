@@ -1,3 +1,17 @@
+# Optional commissioning observations
+
+Normal operation is **open application → START TELEOP → wait for READY → hold A**. Release A to stop; STOP TELEOP disarms. No wizard opens automatically. Missing `verified_setup.json`, eleven test results, expiry or signatures do not block a configured installation.
+
+Configuration readiness means explicit, typed, internally consistent configuration, not physical certification. Validate a new/modified workcell physically before operation: robot calibration ownership, tracking mapping, tool/TCP/payload, mounting, collision model, limits and stopping/recovery. No arbitrary hand motion can establish absolute alignment.
+
+Engineering tools retain **Optional commissioning observations** and managed Preview. This tool still records six-direction capture and supervised stopping observations if useful for site records. Opening it requests disarm. Saving historical evidence does not enable motion, and not completing it does not block ordinary Start. Its source identity and migration checks are deliberately unchanged; do not broaden old compatibility exceptions to conceal changed control code.
+
+For the immediate development task, use [Sway diagnostics](SWAY_DIAGNOSTICS.md). No motion-control algorithm has been changed and no physical cause has been identified.
+
+## Historical V5 procedure (superseded)
+
+The material below preserves the earlier commissioning report. Its automatic opening, mandatory evidence, runtime record checking, session-confirmation and rollback descriptions are obsolete. Current operation is described above and in [Operation](OPERATION.md). In the retained optional tool, “Apply Preview results” retains observations locally; Start uses normal configuration/runtime readiness.
+
 # Initial Setup Wizard
 
 The managed application now creates its own local verified setup. First launch opens the wizard after the backend reports that no matching setup exists. An unchanged verified installation opens the ordinary dashboard: **START TELEOP → wait for READY → hold A**. No daily confirmations, external signed report, record-generation command or approval expiration date is needed.

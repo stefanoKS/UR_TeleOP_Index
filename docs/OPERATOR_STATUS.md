@@ -39,7 +39,7 @@ The new read-only fields are `effective_parameters`, `alignment_verified`,
 `optical_loss_test_verified`, `operator_heartbeat_fresh`,
 `controller_state_fresh`, and `servo_status_fresh`. Pose, stations,
 readiness, rejection and velocity diagnostics already existed in the reviewed
-commit. Those V3.1 additions did not change gating. V4 additionally replaces daily confirmation dependencies in normal Live with verified engineering evidence; dynamic guards remain.
+commit. Those V3.1 additions did not change gating. Current startup uses configuration readiness without procedural evidence; dynamic guards remain.
 
 ## Parameter and service lifecycle
 
@@ -52,7 +52,7 @@ parameter-diff keys.
 
 The complete status snapshot is the single parameter-readback method. The GUI
 does not mix partial status aliases with ROS parameter guesses. Atomic Apply
-sends changed editable runtime keys and manually selected confirmations. It
+sends changed editable runtime keys. It
 never sends the restart-only joint-speed key. Apply + Save writes the submitted
 full preference snapshot atomically only after successful service acceptance.
 Confirmation still requires a subsequent complete matching status snapshot.
@@ -82,8 +82,8 @@ inside the unchanged `ProcessManager` implementation.
 
 | Field | Meaning |
 |---|---|
-| `engineering_required` | Normal Live requires evidence; Preview/explicit supervised sessions retain legacy checks |
-| `engineering_verified`, `engineering_reason` | Matching, fresh evidence result and exact failure explanation; not inferred from legacy flags |
+| `configuration_ready` | Current validated effective configuration; never physical commissioning proof |
+| `configuration_reason` | Exact configuration failure or pending-check explanation |
 | `tracking_valid` | Fresh accepted pose and bridge flag, pose continuity, stable fresh optical data from either station; signal alone cannot set it |
 | `robot_preparation_ready`, `robot_preparation_reason` | Existing mode/safety/program checks plus fresh finite nonzero speed scaling; exact pendant/wait instruction |
 | `robot_fault` | Received safety mode outside NORMAL/REDUCED |
@@ -99,10 +99,14 @@ STOP immediately retires Start intent and publishes absent heartbeat plus the ex
 
 ### Initial Setup additions
 
-Existing fields and types remain unchanged. `engineering_verified` now means a valid matching schema-5 local setup; `engineering_reason` is operator-facing. `setup_checked` is boolean and becomes true only after the first file check completes, preventing a valid restart from briefly opening the wizard. `setup_context` is the immutable startup context JSON string used for file identity; `setup_technical` is an exception string shown in Advanced Diagnostics. `setup_controllers_inactive` means Preview with confirmed inactive motion claimants (also require `controller_state_fresh`). `setup_feedback_fresh` requires fresh measured tool TF and valid fresh joints. `base_frame` and `tool_frame` name the measured transform. `velocity_diagnostics.measured_tcp_orientation` is its quaternion in x,y,z,w order. These are observational fields, not new motion permissions or command interfaces.
+Observation fields retain their types. `engineering_verified`/`engineering_reason` are retired from runtime status; use `configuration_ready`/`configuration_reason`. `setup_checked` is boolean and becomes true only after the first file check completes, indicating configuration validation has run; it never opens a wizard. `setup_context` is the immutable startup context JSON string used for file identity; `setup_technical` is an exception string shown in Advanced Diagnostics. `setup_controllers_inactive` means Preview with confirmed inactive motion claimants (also require `controller_state_fresh`). `setup_feedback_fresh` requires fresh measured tool TF and valid fresh joints. `base_frame` and `tool_frame` name the measured transform. `velocity_diagnostics.measured_tcp_orientation` is its quaternion in x,y,z,w order. These are observational fields, not new motion permissions or command interfaces.
 
 ## V5.1 Preview observation fields
 
 The backend adds `managed_session_id` (managed-process ownership token), `motion_output_enabled` (actual read-only configuration), and `command_publisher_present` (whether its final joint publisher exists). These are observational fields; no command semantics changed. The capture observer matches the managed token and current backend session, verifies the parameter independently using `/vr_real/teleop/get_parameters`, reads `/controller_manager/list_controllers`, and checks the final command publisher graph. A mode label alone is insufficient.
 
 `/vr_real/preview_calibration_observer` subscribes directly to `/vr/controller/pose` (PoseStamped, lighthouse, xyzw), `/vr/controller/joy` (Joy, 16 buttons/12 axes, A at index 4), `/vr/controller/pose_fresh`, `/vr/controller/optical_fresh` (Bool), and `/vr_real/operator_status` (String JSON). It requires one publisher per observed topic. Its own executor checks state every 20 ms; it delivers bounded cumulative snapshots to Tk without invoking widgets. This timer rate is not a guarantee of new sensor samples. Pose ordering and differentiation intervals use source timestamps; button correlation uses receipt timing and bounded freshness. See [V5.1](CALIBRATION_V51.md) for measured synthetic throughput and lifecycle tests.
+
+## Sway observation additions
+
+`measured_joint_position` and `measured_joint_velocity` contain six values in `validation.JOINTS` order (rad and rad/s), or null. The GUI independently subscribes to `smoothed_command`, checks joint names, finite values and source age, and displays final joint velocity plus reference-minus-measured position. Missing/stale data displays Unavailable. These observations never feed the gate. The old alignment/optical-confirmation fields remain deprecated observation compatibility fields and are not operator controls or readiness requirements.

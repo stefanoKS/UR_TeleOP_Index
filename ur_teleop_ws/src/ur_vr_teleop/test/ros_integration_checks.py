@@ -28,12 +28,19 @@ import time
 
 
 @pytest.fixture
-def node(monkeypatch):
+def node(monkeypatch, tmp_path):
     os.environ['ROS_LOCALHOST_ONLY'] = '1'
     # Explicit context domain wins over env; constructor still validates production env.
     monkeypatch.setenv('ROS_DOMAIN_ID', '43')
     rclpy.init(domain_id=147)
     n = Commissioning()
+    # Synthetic configuration in localhost domain 147, never a production record.
+    from ur_vr_teleop.configuration import Configuration, CALIBRATION_HASH
+    calibration=tmp_path/'robot.yaml'; calibration.write_text('kinematics:\n  hash: '+CALIBRATION_HASH+'\n')
+    tracking=tmp_path/'tracking.config'; tracking.write_text('synthetic calibration')
+    settings=dict(robot=dict(ip='127.0.0.1',calibration_file=str(calibration)),
+                  teleop=dict(n.configuration_values(),base_frame='base_link',tool_frame='tool0'))
+    n.configuration=Configuration(json.dumps(dict(settings=settings,tracking=str(tracking))))
     try:
         yield n
     finally:
@@ -81,6 +88,9 @@ def healthy(n):
     result = n.set_parameters([Parameter('alignment_verified', value=True),
                                Parameter('optical_loss_test_verified', value=True)])
     assert all(r.successful for r in result)
+    n.configuration_valid=n.configuration.refresh(n.configuration_values())
+    n.configuration_parameters=n.configuration_values()
+    n.configuration_checked=time.monotonic()
     n.tick()
 
 
@@ -491,6 +501,7 @@ def test_real_tracking_gain_and_scale_apply_without_a_fixed_home_fence(node):
     assert node.set_parameters_atomically([Parameter('tracking_gain_s_inv', value=12.)]).successful
     node.tick()
     assert node.core.response_gain == 12.
+    healthy(node)  # Validate current effective tuning before requesting arm.
     # Synthetic input only; no hardware publisher exists in this fixture.
     assert node.arm(Trigger.Request(), Trigger.Response()).success
     node.tick()
@@ -849,38 +860,34 @@ def test_dashboard_readback_and_confirmations_match_actual_backend(node):
     assert node.command_pub is None
 
 
-def test_v4_live_record_is_required_even_with_legacy_flags(node):
+def test_missing_configuration_blocks_even_with_legacy_flags(node):
     healthy(node)
-    node.engineering_required = True
-    assert node.get_parameter('alignment_verified').value
-    assert node.get_parameter('optical_loss_test_verified').value
+    node.configuration=None
     assert not node.arm(Trigger.Request(), Trigger.Response()).success
-    assert any('Open Setup Wizard' in reason for reason in node.reasons())
+    assert any('Configuration context missing' in reason for reason in node.reasons())
 
 
-def test_v4_verified_record_does_not_require_session_flags_and_runtime_checks_remain(node):
+def test_configuration_does_not_require_session_flags_and_runtime_checks_remain(node):
     healthy(node)
     node.set_parameters_atomically([Parameter('alignment_verified', value=False),
                                     Parameter('optical_loss_test_verified', value=False)])
-    node.engineering_required = True
-    node.engineering_valid = True  # Mock evidence boundary only; no driver/publisher.
-    node.engineering_checked = time.monotonic()
-    node.engineering_parameters = node.engineering_values()
+    node.configuration_valid = True  # Mock configuration boundary only; no driver/publisher.
+    node.configuration_checked = time.monotonic()
+    node.configuration_parameters = node.configuration_values()
     assert node.arm(Trigger.Request(), Trigger.Response()).success
     node.on_optical(Bool(data=False))
     assert not node.gate.armed
     assert not node.arm(Trigger.Request(), Trigger.Response()).success
 
 
-def test_v4_runtime_mapping_change_immediately_invalidates_record(node):
+def test_runtime_mapping_change_requires_current_configuration_check(node):
     healthy(node)
-    node.engineering_required = True
-    node.engineering_valid = True
-    node.engineering_checked = time.monotonic()
-    node.engineering_parameters = node.engineering_values()
-    assert node.engineering_ready()
+    node.configuration_valid = True
+    node.configuration_checked = time.monotonic()
+    node.configuration_parameters = node.configuration_values()
+    assert node.configuration_ready()
     result=node.set_parameters_atomically([Parameter('tracking_to_robot_rpy_deg',value=[0.,0.,40.])])
-    assert result.successful and not node.engineering_ready()
+    assert result.successful and not node.configuration_ready()
     assert not node.arm(Trigger.Request(), Trigger.Response()).success
 
 
@@ -893,16 +900,16 @@ def test_v4_tracking_indicator_requires_pose_not_just_optical(node,station):
     assert not node.tracking_valid()
 
 
-def test_v4_native_limit_mismatch_is_not_hidden_by_record(node):
+def test_native_limit_mismatch_is_not_hidden_by_configuration(node):
     healthy(node)
-    node.engineering_required=True
-    node.engineering_valid=True
-    node.engineering_checked=time.monotonic()
-    node.engineering_parameters=node.engineering_values()
-    node.engineering=SimpleNamespace(context={'settings':{'teleop':{'max_joint_speed_rad_s':.5},
+    node.configuration_valid=True
+    node.configuration_checked=time.monotonic()
+    node.configuration_parameters=node.configuration_values()
+    node.configuration=SimpleNamespace(context={'settings':{'teleop':{'max_joint_speed_rad_s':.5},
         'robot':{'joint_command_acceleration_rad_s2':1.,'joint_command_jerk_rad_s3':10.}}})
-    assert node.engineering_controller_matches()
+    assert node.configuration_controller_matches()
+    node.motion_output=True
     node.hardware_smoothing['jerk']=100.
-    assert not node.engineering_controller_matches()
+    assert not node.configuration_controller_matches()
     assert any('Effective native smoothing limits differ' in r for r in node.reasons())
     assert not node.arm(Trigger.Request(),Trigger.Response()).success

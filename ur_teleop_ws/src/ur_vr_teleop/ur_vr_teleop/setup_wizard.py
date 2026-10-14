@@ -40,7 +40,7 @@ class SetupWizard:
         body = ttk.Frame(self.window, padding=14)
         body.pack(fill='both', expand=True)
         ttk.Label(body, text='Initial Setup', font=('DejaVu Sans', 18, 'bold')).pack(anchor='w')
-        ttk.Label(body, text='Configure once. Live monitoring remains active on every launch. No motion starts automatically.').pack(anchor='w', pady=5)
+        ttk.Label(body, text='Optional historical observations. These records do not grant readiness or enable motion.').pack(anchor='w', pady=5)
         self.status = tk.StringVar(value='Waiting for backend connection…')
         ttk.Label(body, textvariable=self.status, wraplength=950).pack(anchor='w')
         # Reserve the stop/footer before allocating expanding tab content.
@@ -170,23 +170,20 @@ class SetupWizard:
     def apply_preview(self):
         def apply():
             d = self.guard()
-            if not self.preview_complete() or d.get('engineering_required') is not False:
+            if not self.preview_complete() or not str(d.get('mode', '')).startswith('LIVE'):
                 raise ValueError('Complete Preview checks and enter supervised Live first.')
             if self.baseline_parameters != d.get('effective_parameters') or self.gui.parameters.changed():
                 raise ValueError('Settings changed. Save settings and repeat Preview verification.')
-            self.gui.alignment.set(True)
-            self.gui.optical.set(True)
-            self.gui.apply()
-            self.message.set('Preview results submitted; waiting for backend confirmation.')
+            self.message.set('Preview observations retained in this optional report.')
         self.invoke(apply)
 
     def start_live(self):
         def start():
             d = self.guard()
-            if (not self.preview_complete() or d.get('engineering_required') is not False
-                    or d.get('alignment_verified') is not True or d.get('optical_loss_test_verified') is not True):
-                raise ValueError('Apply Preview results and wait for backend confirmation first.')
-            self.gui.start_teleop(supervised=True)
+            if (not self.preview_complete() or not str(d.get('mode', '')).startswith('LIVE')
+                   ):
+                raise ValueError('Complete optional Preview observations and select Live first.')
+            self.gui.start_teleop()
         self.invoke(start)
 
     def stopped(self):
@@ -335,7 +332,7 @@ class SetupWizard:
         if stop:
             self.gui.stop_teleop()
             # Never leave an abandoned wizard in the legacy session path.
-            if self.gui.last_status.get('engineering_required') is False and self.gui.process_worker:
+            if str(self.gui.last_status.get('mode', '')).startswith('LIVE') and self.gui.process_worker:
                 self.gui.stack_action('routine_live')
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.window.destroy()

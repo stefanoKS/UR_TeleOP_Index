@@ -32,6 +32,7 @@ cd ~/Documents
 git clone https://github.com/stefanoKS/UR_TeleOP_Index.git Teleop
 cd Teleop
 sudo apt install python3-vcstool python3-rosdep python3-colcon-common-extensions
+sudo apt install ros-humble-ros2bag ros-humble-rosbag2-py ros-humble-rosbag2-storage-default-plugins
 vcs import . < dependencies.repos
 git -C ur_teleop/tools/libsurvive submodule update --init --recursive
 ```
@@ -44,7 +45,7 @@ git -C ur_teleop/tools/libsurvive submodule update --init --recursive
 sudo apt install build-essential cmake pkg-config zlib1g-dev libx11-dev \
   libusb-1.0-0-dev freeglut3-dev liblapacke-dev libopenblas-dev \
   libatlas-base-dev libeigen3-dev python3-numpy python3-scipy python3-yaml \
-  python3-tk python3-pil python3-pil.imagetk python3-pytest \
+  python3-tk python3-pil python3-pil.imagetk python3-pytest python3-matplotlib \
   ros-humble-ur ros-humble-moveit-servo ros-humble-ruckig
 ```
 

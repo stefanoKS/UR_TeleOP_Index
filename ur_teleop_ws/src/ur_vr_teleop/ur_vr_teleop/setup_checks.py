@@ -50,7 +50,7 @@ class SetupChecks:
             elif self.phase == 'restore' and d.get('tracking_valid') is True:
                 self.complete({'loss_and_recovery': True})
             return
-        if not str(d.get('mode', '')).startswith('LIVE') or d.get('engineering_required') is not False:
+        if not str(d.get('mode', '')).startswith('LIVE'):
             self.cancel()
             return
         v = d.get('velocity_diagnostics', {})
@@ -123,7 +123,7 @@ class SetupChecks:
                 raise ValueError('Use Preview with controllers inactive, valid tracking and A released.')
             self.test, self.phase = name, 'loss'
         elif name in ('a_stop', 'tracking_stop', 'software_stop'):
-            if not str(d.get('mode', '')).startswith('LIVE') or d.get('engineering_required') is not False:
+            if not str(d.get('mode', '')).startswith('LIVE'):
                 raise ValueError('Begin an authorized supervised Live session first.')
             self.results.pop(name, None)
             if name == 'tracking_stop':

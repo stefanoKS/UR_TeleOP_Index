@@ -10,7 +10,7 @@ Use the workstation's **UR10e Teleop** shortcut or run:
 ~/Documents/Teleop/ur_teleop/start_teleop.sh
 ```
 
-The desktop starts **Live automatically, with motion disarmed and the scaled controller inactive**. Press START TELEOP only when the work area is ready. A matching saved setup is required for routine operation. On first launch, the [Initial Setup Wizard](INITIAL_SETUP.md) opens automatically after backend verification. It manages the robot driver, tracking, commissioning nodes, and optional camera/RViz. Preview connects to real robot state but does not publish teleop joint commands. It expects motion controllers to remain inactive. If you need a completely hardware-free environment, use the [mock simulator](COMMISSIONING.md#automated-validation).
+The desktop starts **Live automatically, with motion disarmed and the scaled controller inactive**. Press START TELEOP only when the work area is ready. No wizard or historical setup record is required and none opens automatically. Configuration must explicitly supply the robot calibration, mapping and frames. The desktop manages the robot driver, tracking, commissioning nodes, and optional camera/RViz. Preview connects to real robot state but does not publish teleop joint commands. It expects motion controllers to remain inactive. If you need a completely hardware-free environment, use the [mock simulator](COMMISSIONING.md#automated-validation).
 
 `start_gui.sh` opens only the operator panel for an existing stack. It does not start tracking or the driver. Avoid launching duplicate panels or bridges: duplicate command publishers and missing ownership checks can block readiness.
 
@@ -32,7 +32,7 @@ viewer in a separate window; it is not collision sensing.
 |---|---|
 | START TELEOP | Asynchronously prepare the controller, start Servo if needed, request enable, then wait for actual backend arming |
 | STOP TELEOP | Interrupt startup, clear enable intent, and request a software stop; always available |
-| Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, individual preparation, legacy supervised controls, full backend diagnostics |
+| Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, individual preparation, optional observations and read-only sway recording |
 | Open RViz / D405 camera | Optional visualization; camera is not collision protection |
 | Apply changes | Submit the edited named settings to the running backend while disarmed with A released |
 | Apply + save | Save accepted persistent tuning for next launch; a changed joint speed still requires Restart ROS |
@@ -45,9 +45,9 @@ Status explains what is blocking motion. Measured TCP and joint feedback continu
 1. Keep A released and motion controllers inactive.
 2. Confirm the expected controller identity and fresh 6-DoF pose. Either Lighthouse 0 or Lighthouse 1 is sufficient when its calibration and pose solution are valid.
 3. Check measured `tool0` against the actual robot/tool arrangement. A custom pendant TCP is not automatically the model's `tool0`.
-4. In Preview, verify the sign of all three translations and rotations with small hand movements. Confirm the alignment only after checking the actual mapping.
+4. In Preview, verify the sign of all three translations and rotations with small hand movements. Assess physical alignment; the software does not certify it.
 5. Verify optical loss with motion controllers inactive. Both stations blocked must remove readiness; one station remaining can preserve readiness if its pose remains valid.
-6. In an explicit supervised engineering session, apply the two legacy session confirmations only after those checks. Record the evidence under [V4 commissioning](COMMISSIONING.md#v4-engineering-record). Routine operators do not submit these confirmations.
+6. Record physical findings through the site commissioning process; the [optional observations tool](INITIAL_SETUP.md) can help. No session confirmation booleans or eleven-step evidence record are required for startup.
 
 If tracking has been recalibrated or a station moved, repeat alignment verification. Do not use a station-count policy switch to repair bad tracking; the supported policy is already `any_station`.
 
@@ -70,7 +70,7 @@ A saved joint-speed change requires restarting the ROS stack because the final n
 5. Hold A to move; release A to request a controlled stop.
 6. Press **STOP TELEOP** to clear enable intent. A new START is required afterward.
 
-A previously commissioned, unchanged installation needs no daily checkboxes or separate Servo/controller buttons. “Open Setup Wizard” means setup is missing, damaged, changed, or outside its verified tuning envelope. Do not invent confirmations to clear it. Effective TCP speed caps and the active final joint limit remain visible even while editing drafts. Saved high limits are not evidence of approval.
+A previously commissioned, unchanged installation needs no daily checkboxes or separate Servo/controller buttons. A configuration error names the missing or inconsistent input. Resolve it in the selected configuration; do not assume a numeric RPY value proves physical alignment. Effective TCP speed caps and the active final joint limit remain visible even while editing drafts. Saved high limits are not evidence of approval.
 
 Missing hardware prerequisites wait without repeated clicks. Failed services show the failing stage and require a controlled START retry after correction. An **enable service timeout with unknown outcome requires Restart ROS**: local cancellation cannot undo a request already received by the server. STOP remains available; the GUI withholds its heartbeat to prevent a delayed enable from restoring motion permission.
 
@@ -111,14 +111,9 @@ The active native joint limit and saved restart-pending limit appear separately.
 Restart ROS remains an explicit operator action; the pending label clears only
 when backend and final-controller readback match the saved value. Revert restores
 confirmed runtime values, retains the separate saved restart setting, and does
-not submit changes or alter session checkboxes. Restore Defaults only stages
-editable defaults; hidden compatibility settings remain intact. A mapping edit
-clears the local alignment checkbox so an old check cannot approve a new mapping.
+not submit changes. Restore Defaults only stages editable defaults; hidden compatibility settings remain intact. A mapping edit requires physical review before operating.
 
-In explicit supervised engineering sessions, legacy checkboxes express draft intent. Routine Live uses the locally saved verified setup. The checklist uses backend confirmation;
-checking a box alone shows **Pending application**, not **Verified**. Backend
-mapping invalidation revokes verification. Restart clears local session checks;
-stale status shows **Unknown / status unavailable**.
+Configuration readiness checks explicit mapping, frames, robot calibration and current typed tuning. It does not claim that mounting, TCP/payload or physical alignment has been assessed. Stale backend status is unavailable, never ready.
 
 External changes to a field being edited preserve the draft and show a conflict.
 Use Revert to accept current values, then re-enter intended edits. This avoids
@@ -133,8 +128,8 @@ all current blockers. Long process messages are available there in full.
 
 ## Engineering and rollback
 
-Engineering Preview is available under **Engineering / diagnostics** or with `start_teleop.sh --preview`; the separate domain-42 simulator remains hardware-free. The technical panel is intended for authorized engineers, and its manual Enable is disabled during routine V4 Live operation.
+Engineering Preview is available under **Engineering / diagnostics** or with `start_teleop.sh --preview`. The separate domain-42 simulator remains hardware-free. Optional commissioning observations are accessible in Engineering tools; they never open automatically. `--engineering-session` is accepted for old launch commands but does not alter readiness or provide a manual-enable bypass.
 
-To temporarily use the previous supervised workflow, stop the owned stack and close the app, then run `ur_teleop/start_teleop.sh --preview --engineering-session`. Under Engineering, select Live, perform the documented mapping and optical-loss checks, apply the session confirmations, prepare the controller, start Servo, and use **Enable (supervised commissioning)**. This explicit mode uses the original session checks; it does not fabricate a V4 record or clear robot protections. Return to the normal launcher to restore saved-setup startup.
+## Record sway
 
-Normal setup uses **Settings → Recalibrate / Initial Setup**; see the [wizard guide](INITIAL_SETUP.md). The legacy expert commands above remain available for debugging.
+Open **Engineering / diagnostics → Advanced diagnostics / sway recording** and press **RECORD SWAY DIAGNOSTICS** before the separately authorized diagnostic session. Recording does not start or enable teleoperation. Press **STOP RECORDING** afterward and wait for the saved/failed message. STOP TELEOP remains separate and always visible. Camera availability does not affect recording. See [analysis and interpretation](SWAY_DIAGNOSTICS.md).

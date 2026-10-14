@@ -156,14 +156,14 @@ def test_preview_loss_not_station_count_only():
     assert c.results['preview_loss']['observed']
 
 
-def test_supervised_start_is_explicit_and_preserves_confirmations():
+def test_start_uses_configuration_without_supervised_bypass():
     from test_startup import ready
-    d=ready();d.update(engineering_verified=False,engineering_required=False,
-                         alignment_verified=True,optical_loss_test_verified=True)
-    s=Startup();s.start(d['session_id']);assert s.step(d,True,0) is None
-    s=Startup();s.start(d['session_id'],supervised=True)
-    assert s.step(d,True,0) is not None
+    d=ready(engineering_verified=False,engineering_required=False,
+            alignment_verified=False,optical_loss_test_verified=False)
+    s=Startup();s.start(d['session_id']);assert s.step(d,True,0)=='prepare'
     s.stop();assert s.step(d,True,1) is None
+    d['configuration_ready']=False
+    s.start(d['session_id']);assert s.step(d,True,2) is None
 
 
 def test_legacy_migration_preserves_limits_and_rejects_changed_control(installation):

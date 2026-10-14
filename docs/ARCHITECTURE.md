@@ -77,7 +77,7 @@ Native velocity, acceleration, jerk, following-error, period, and finite-state c
 
 ## Supervision and stopping
 
-Readiness combines tracking/TF/joint freshness, robot RUNNING state, safety NORMAL or REDUCED state, External Control program running, nonzero speed scaling, Servo state, controller ownership, command watchdog verification, GUI heartbeat, and a matching verified setup in routine Live (legacy session confirmations only in explicit supervised engineering sessions). REDUCED does not disable the robot's independent limits. Servo codes 2, 4, and 5 block motion; permitted codes 0, 1, 3, and 6 retain Servo's corresponding behavior. Unknown or stale status blocks.
+Readiness combines tracking/TF/joint freshness, robot RUNNING state, safety NORMAL or REDUCED state, External Control program running, nonzero speed scaling, Servo state, controller ownership, command watchdog verification, GUI heartbeat, and current configuration integrity (explicit mapping, calibrated robot model, frames and typed tuning). REDUCED does not disable the robot's independent limits. Servo codes 2, 4, and 5 block motion; permitted codes 0, 1, 3, and 6 retain Servo's corresponding behavior. Unknown or stale status blocks.
 
 Controller discovery must show the scaled controller as the sole position claimant in live operation. Dry-run expects motion controllers inactive. The configured controller command watchdog must be in the accepted **0.10–0.25 s** interval, with `constraints.goal_time` below it. Listing and parameter checks are not replaced by a GUI label.
 
@@ -165,14 +165,16 @@ The domain-42 `ur_vr_sim_teleop` launch uses `GenericSystem`, `sim_` joints, a f
 
 Dashboard status fields and parameter synchronization are documented in the [operator-status contract](OPERATOR_STATUS.md).
 
-V4 adds a pure asynchronous `Startup` coordinator in the GUI and background `Verification` of local setup identity in commissioning. It uses existing services and no additional command publisher. Desktop defaults to Live disarmed; Preview remains explicit. See [status contract](OPERATOR_STATUS.md#v4-authoritative-readiness-and-coordinator) and [engineering record](COMMISSIONING.md#v4-engineering-record).
+The asynchronous `Startup` coordinator uses backend `configuration_ready` plus live readiness. Background `Configuration` checks the effective installation inputs in commissioning. It uses existing services and no additional command publisher. Desktop defaults to Live disarmed; Preview remains explicit. See [status contract](OPERATOR_STATUS.md#v4-authoritative-readiness-and-coordinator) and [optional historical evidence](COMMISSIONING.md#v4-engineering-record).
 
 
 ## Initial Setup Wizard
 
-`setup_wizard.py` is an observational Tk adapter. `setup_checks.py` records Preview mapping/orientation and supervised Live stop/recovery sequences; it never publishes a command. The existing process-owner worker explicitly restarts into supervised Preview/Live with legacy checks, then returns to routine Live after saving or canceling. `Startup` accepts supervised operation only when explicitly selected and both legacy confirmations are acknowledged; the backend remains authoritative. Routine startup still requires verified setup.
+The former mandatory wizard is now an optional engineering observation tool. It never opens automatically and historical results never grant readiness. `setup_checks.py`, `calibration_capture.py` and its read-only observer retain their observation/isolation rules. Physical tests still require explicit supervision.
 
-`engineering.py` atomically saves schema-5 `verified_setup.json` next to the original selected YAML. Identity includes robot/calibration, tracking calibration, tool/mapping/tuning and motion-related source/dependency/template hashes. UI and documentation files are excluded. File checking remains off the command executor, at the existing refresh/staleness intervals. No actuator, Servo, filter, watchdog or stop implementation changes. Additional status fields support observation; see [status contract](OPERATOR_STATUS.md).
+`configuration.py` checks the effective snapshot and current parameters on a background worker. `verified_setup.json`, expiry, eleven test results and source identity are absent from the runtime readiness path. Source compatibility exceptions for old evidence remain narrow and unchanged. The native limits check still compares actual controller readback with the startup configuration.
+
+The diagnostics recorder is a separate owned process that only runs bag recording and parameter reads. The offline analyzer instantiates no ROS node. Neither can enable motion. See [sway diagnostics](SWAY_DIAGNOSTICS.md).
 
 ## Controller-driven Preview calibration
 

@@ -348,7 +348,7 @@ def parse_options(args=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--live', dest='live', action='store_true', default=True, help='Live stack (default), still disarmed/inactive')
     mode.add_argument('--preview', dest='live', action='store_false', help='Engineering Preview, no final motion publisher')
-    parser.add_argument('--engineering-session', action='store_true', help='Authorized supervised commissioning: retain legacy session confirmations and manual Enable')
+    parser.add_argument('--engineering-session', action='store_true', help='Deprecated compatibility option; configuration and runtime protections always apply')
     parser.add_argument('--config', default=str(Path.home()/'Documents/Teleop/ur_teleop/config/real_teleop.yaml'))
     return parser.parse_args(args)
 

@@ -181,7 +181,7 @@ def test_idle_preview_predicate_is_not_relaxed():
     d['a_held']=True;assert not SetupChecks.preview(d)
 
 
-def test_observational_source_change_preserves_v5_identity_only( tmp_path, monkeypatch):
+def test_new_readiness_change_is_not_hidden_by_old_observational_transition( tmp_path, monkeypatch):
     from ur_vr_teleop import engineering as e
     from test_setup import installation
     root,settings,encoded,baseline,results=installation.__wrapped__(tmp_path,monkeypatch)
@@ -191,7 +191,8 @@ def test_observational_source_change_preserves_v5_identity_only( tmp_path, monke
     current,original=next(iter(data[path].items()))
     (root/path).write_bytes((project/path).read_bytes())
     bound=e.identity(settings,root,root/'tracking.json')
-    assert bound['software'][path]==original
+    assert bound['software'][path]==e.digest(project/path)
+    assert bound['software'][path]!=original  # Do not broaden the old compatibility exception.
     e.save_setup(encoded,{},bound,results,'Synthetic preexisting V5 evidence')
     assert e.Verification(encoded).refresh({})
     (root/path).write_text((root/path).read_text()+'\n# Simulated motion-code change\n')

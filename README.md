@@ -1,4 +1,4 @@
-> **V4 operator workflow:** Open the app → **START TELEOP** → wait for **READY** → hold A to move. Release A to stop; **STOP TELEOP** disarms. Routine Live operation requires a matching [verified setup](docs/INITIAL_SETUP.md) created by the Initial Setup Wizard. No record has been created or physical validation performed by this software change.
+> **Operator workflow:** Open the app → **START TELEOP** → wait for **READY — PRESS A TO MOVE** → hold A. Release A to stop; **STOP TELEOP** disarms. An existing configured workcell needs no wizard or historical evidence file. Configuration integrity and live robot protections still apply. New or modified workcells require physical validation before operation. See [sway recording and offline analysis](docs/SWAY_DIAGNOSTICS.md).
 
 # UR10e Valve Index teleoperation
 
@@ -143,4 +143,4 @@ Dashboard status fields and parameter synchronization are documented in the [ope
 
 [V4 implementation, validation, screenshots and rollback](docs/V4_STARTUP_REPORT.md).
 
-[Initial Setup Wizard, migration and validation report](docs/INITIAL_SETUP.md).
+[Optional commissioning observations and historical setup records](docs/INITIAL_SETUP.md).

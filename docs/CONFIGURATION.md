@@ -10,7 +10,7 @@ This reference covers application parameters, managed launch settings, and proje
 4. The desktop writes a session `effective_config.yaml` with `effective_sources`. Loading this snapshot does not reread the adjacent preference file. Driver generation and commissioning use the same snapshot.
 5. Accepted atomic GUI updates can change runtime teleop parameters. Startup-only native limits still require restarting the stack. Saving follows backend acceptance; a newly saved joint-speed request is retained for restart while the running value remains unchanged.
 
-`alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. These are legacy supervised engineering-session checks; routine Live uses the verified setup instead. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
+`alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. These are deprecated observational compatibility fields; neither is a readiness requirement. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
 
 Inspect the panel, `/vr_real/operator_status`, ROS parameters, and session `effective_settings.log`. A snapshot records startup, not every subsequent runtime update. `preferences.py` is authoritative for saved-key validation; `commissioning.py` validates runtime updates.
 
@@ -43,7 +43,7 @@ ROS runtime tuning uses floating-point parameters (and a double array for RPY); 
 | `linear_velocity_filter_s` | Hand linear velocity EMA time / s | 0.04 | None | 0–0.2; 0 disables | Saved/runtime; D; velocity mode |
 | `angular_velocity_filter_s` | Hand angular velocity EMA time / s | 0.04 | None | 0–0.2; 0 disables | Saved/runtime; D; velocity mode |
 | `joint_acceleration_warning_rad_s2` | Upstream diagnostic warning / rad/s² | 5.0 | 5.0 | >0 | Saved/runtime; D; not a command limiter |
-| `tracking_to_robot_rpy_deg` | Tracking-to-base roll/pitch/yaw / deg | [0, 0, −90] | **[0, 0, −40]** | Three finite numbers | Saved/runtime; D; mapping change invalidates verification |
+| `tracking_to_robot_rpy_deg` | Tracking-to-base roll/pitch/yaw / deg | [0, 0, −90] | **[0, 0, −40]** | Three finite numbers | Saved/runtime; D; mapping change requires physical review and a fresh configuration check |
 
 “None” means no saved key, so YAML/default supplies it. Existing high saved values are not commissioning recommendations. Do not silently replace them in documentation or assume YAML is active.
 
@@ -58,8 +58,8 @@ These are not persisted tuning keys. Directly instantiating a node can differ fr
 | `axis_map` | Initial 3×3 tracking rotation / row-major matrix | Identity in Preview constructor | Proper finite orthonormal rotation | Startup ROS; restart; commissioning configures RPY mapping |
 | `observation_timeout_s` | Pose/joy/joint/TF age bound / s | YAML/Commissioning 0.35; standalone Preview 0.20 | 0.10–0.50 | Startup ROS/YAML; restart |
 | `workspace_radius_m` | Radius about initial robot reference / m | 0 | 0 disabled or 0.05–0.50 | Commissioning startup ROS/YAML; restart |
-| `alignment_verified` | Operator verified mapping / bool | false, reset on load | true/false, subject to checks | GUI atomic update; D; session only |
-| `optical_loss_test_verified` | Operator verified loss without motion / bool | false, reset on load | true/false | GUI atomic update; D; session only |
+| `alignment_verified` | Legacy observed mapping / bool; no readiness effect | false, reset on load | true/false, subject to checks | GUI atomic update; D; session only |
+| `optical_loss_test_verified` | Legacy loss observation / bool; no readiness effect | false, reset on load | true/false | GUI atomic update; D; session only |
 | `motion_output_enabled` | Create final command publisher / bool | false | true/false | Launch/desktop; restart; not permission to move |
 | `use_sim_time` | ROS clock source / bool | false | Production Preview rejects true | Keep false; startup |
 
@@ -226,18 +226,15 @@ persisted keys, or committed operator overrides changed in this stabilization.
 
 ## V4 startup and engineering configuration
 
-No operator preference schema or numeric default changed. Desktop defaults to Live, disabled/inactive. `--preview` selects Preview; `--live` remains compatible. `--engineering-session` explicitly selects the supervised legacy confirmation/manual Enable workflow, intended for initial physical commissioning and rollback. The corresponding launch argument `engineering_session` defaults false. Direct launch `motion_output_enabled` remains false by default.
+Desktop defaults to Live, disabled/inactive. `--preview` selects Preview; direct launch defaults to motion output disabled. `--engineering-session` / `engineering_session` remain accepted for compatibility and grant no alternate readiness path. The old `engineering_required` parameter is accepted but ignored.
 
-Read-only backend `engineering_required` is true for normal Live launch and false for Preview/explicit engineering sessions. Read-only `engineering_context` carries the original effective settings and installation, record and tracking-calibration paths as JSON. The effective snapshot adds top-level `engineering_installation` and `engineering_record_path`; neither is a saved tuning key or motion authorization. Legacy confirmation parameters cannot replace a missing record in normal Live.
+`engineering_context` retains its wire name for compatibility and carries the immutable effective configuration plus tracking calibration path. The backend checks this using `configuration.Configuration`, not `engineering.Verification`. Explicit mapping must come from YAML or saved preferences; a built-in fallback alone is insufficient. RPY/tuning must be typed and finite, robot IP valid, calibration readable with the installation's expected hash, and frames must match Servo (`base_link`, `tool0`). The libsurvive file must be readable/nonempty; its native format is not parsed as strict JSON. Runtime optical/pose guards independently validate observations. Calibration file changes within a session block until review/restart.
 
-See [record creation and invalidation](COMMISSIONING.md#v4-engineering-record) for the exact identity/envelope and engineering trust boundary. For separate low-speed profiles outside the repository, installation discovery falls back to the active package location; the record stays beside that profile. Its installation must match the `--root` used to issue the record. Do not create or copy an attestation to avoid genuine commissioning.
-
+Checks run on the file worker every 0.5 s; results older than 2 s or for different current parameters cannot grant readiness. Configuration checks do not prove physical alignment or calibration ownership. Before operating a new/modified workcell, physically assess mapping, tool/TCP/payload, mounting and stopping behavior. Existing explicit saved configuration is reused without requiring evidence files or repeated GUI approvals.
 
 ### Wizard setup persistence (schema 5)
 
-The application generates **verified_setup.json** alongside the selected original YAML, in `ur_teleop/config` for the standard installation. Atomic owner-only saving uses a temporary file, file fsync, replace, and directory fsync. It stores installation/host, configured robot IP and calibration digest, configured VR serial and tracking digest, mapping/tool/tuning identity, control/dependency/template hashes, verified motion modes/limit envelope, observation results and the authorized physical assessment. It does not store enable intent, expiry or an external report requirement. Selected settings are saved using the existing validated preference writer; legacy session flags still reset false.
-
-`engineering_context` and `engineering_record_path` retain their names for compatibility; the legacy record path locates the adjacent new setup file. A reduced limit within the verified envelope is allowed. Raised limits, unverified modes, changed mapping/tool/calibration/tracking/tuning/control source require verification. UI styling and documentation do not. Physical mounting, TCP or station moves must be declared by reopening the wizard because files cannot detect them. No numeric defaults or committed operator overrides change in this work.
+`verified_setup.json`, `engineering_record_path`, legacy source hashes and migration records remain optional historical evidence. They are never consulted by routine readiness. The optional observations tool can still validate/save its historical record format, but a missing/incompatible record does not block ordinary Start. No numeric defaults, saved operator overrides or motion algorithms changed.
 
 ## V5.1 internal capture quality thresholds
 

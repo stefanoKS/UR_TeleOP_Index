@@ -30,7 +30,9 @@ Paths below are relative to the repository root.
 | Native UR controller integration | `ur_teleop_ws/src/ur_teleop_controllers/src/smooth_scaled_controller.cpp` |
 | Ruckig state/reference logic | `ur_teleop_ws/src/ur_teleop_controllers/include/ur_teleop_controllers/smoothing.hpp` |
 | One-button workflow | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/startup.py` |
-| Verified setup and legacy evidence import | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/engineering.py` |
+| Optional historical setup and legacy evidence import | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/engineering.py` |
+| Configuration readiness | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/configuration.py` |
+| Sway recording and offline analysis | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/sway_recording.py`, `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/sway_analysis.py` |
 | GUI | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gui.py` |
 | Settings validation/persistence | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/preferences.py` |
 | Managed process lifecycle/driver generation | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/desktop.py` |
@@ -116,7 +118,7 @@ The order is defaults → selected YAML → adjacent validated operator preferen
 Accepted runtime atomic updates can supersede startup teleop values.
 The desktop passes the same snapshot to driver generation and commissioning.
 A snapshot marked with `effective_sources` must not reread mutable preferences.
-Legacy engineering-session confirmations reset false. Routine Live requires a matching verified setup record; never manufacture one from automated tests or persist enable intent.
+Legacy confirmation parameters reset false and no longer grant readiness. Routine Live requires explicit valid configuration and runtime readiness, not verified_setup.json. Never manufacture physical validation or persist enable intent.
 Native joint limits and servoj tuning require restart; changing a ROS value alone is insufficient.
 Verify effective runtime settings rather than assuming YAML values are active.
 The committed saved linear speed is 1.5 m/s, versus YAML 0.10 m/s.
@@ -125,7 +127,7 @@ Do not silently “correct” operator preferences in unrelated work.
 GUI ratios are inverse stored scales; deadbands/time constants may have display-unit conversions.
 If adding a tuning key, inspect DEFAULTS order and GUI indexing as well as validation and persistence.
 Apply settings only while disarmed with A released; preserve atomic rejection behavior.
-Changing alignment must invalidate the previous mapping verification.
+Changing alignment invalidates cached configuration readiness until current values are checked. It also invalidates prior physical mapping assumptions; numeric validation is not physical proof.
 Do not rename legacy keys without checking saved-profile migration tests.
 Do not bypass the calibration hash check to make a launch work on a different robot.
 
@@ -197,6 +199,6 @@ Preserve useful historical notes, but label their obsolete assumptions rather th
 Keep this file actionable; put detailed parameter inventories and procedures in `docs/`.
 Do not add nested AGENTS files unless a package has genuinely distinct engineering requirements.
 
-V4 coordinator requests existing services only; the backend remains authoritative. STOP must retire in-flight requests and withhold heartbeat. Unknown enable outcomes require a fresh backend session before retry. Setup file hashing runs off the command executor; stale/mismatched setup blocks motion. The Initial Setup Wizard records observed checks plus supervised physical assessments, never checkbox-only proof; UI/documentation changes do not invalidate control identity. Keep `--engineering-session` explicit and supervised, with legacy checks intact.
+V4 coordinator requests existing services only; the backend remains authoritative. STOP must retire in-flight requests and withhold heartbeat. Unknown enable outcomes require a fresh backend session before retry. Configuration file checking runs off the command executor; missing/invalid/stale configuration blocks motion. Historical commissioning evidence and software identity are not routine readiness dependencies. The optional commissioning observation tool records observed checks plus supervised physical assessments, never checkbox-only proof; it never opens automatically and its records do not grant motion permission. `--engineering-session` is a deprecated compatibility option, with no readiness bypass. Optional physical observations remain explicitly supervised.
 
 V5.1 Preview capture lives in `calibration_capture.py` (pure bounded engine), `calibration_observer.py` (dedicated read-only ROS executor) and `calibration_panel.py` (Tk only). Keep capture isolation separate from A-released `SetupChecks.preview()`. Preserve source ordering, post-release fresh pose/flag corroboration, managed-session/read-only-parameter/controller-manager/graph checks, bounded mailboxes and joined shutdown. Never infer an absolute mapping from arbitrary hand motion. `setup_source_compatibility.json` permits only the exact reviewed observational backend hash transition; never broaden it to hide a motion-control change. Run `calibration_ros_check.py` explicitly in addition to the documented regression/GUI checks.

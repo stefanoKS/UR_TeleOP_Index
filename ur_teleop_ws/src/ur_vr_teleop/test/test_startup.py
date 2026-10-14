@@ -10,7 +10,7 @@ from ur_vr_teleop.startup import Startup
 def ready(**changes):
     return dict(dict(session_id='one', mode='LIVE OUTPUT', operator_heartbeat_fresh=True,
                      a_held=False, armed=False, enable_requested=False,
-                     engineering_verified=True, robot_preparation_ready=True,
+                     configuration_ready=True, robot_preparation_ready=True,
                      tracking_valid=True, observations_healthy=True, stationary=True,
                      controller_state_fresh=True, controller_ready=False,
                      controller_preparation_allowed=True, servo_status_fresh=False,
@@ -46,7 +46,7 @@ def test_already_prepared_skips_redundant_calls(controller,servo,expected):
     assert s.step(d,True,0)==expected
 
 
-@pytest.mark.parametrize('field', ['operator_heartbeat_fresh','engineering_verified',
+@pytest.mark.parametrize('field', ['operator_heartbeat_fresh','configuration_ready',
     'robot_preparation_ready','tracking_valid','observations_healthy','stationary',
     'controller_state_fresh','controller_preparation_allowed'])
 def test_missing_prerequisite_waits_without_service_or_retry(field):
@@ -136,3 +136,9 @@ def test_servo_previously_started_but_stale_is_not_started_twice():
     d=ready(controller_ready=True,servo_started=True,servo_status_fresh=False)
     assert s.step(d,True,0) is None
     assert 'status lost' in s.message
+
+
+def test_missing_historical_record_does_not_block_configured_start():
+    s=workflow()
+    d=ready(engineering_verified=False,engineering_required=True,alignment_verified=False,optical_loss_test_verified=False)
+    assert s.step(d,True,0)=='prepare'

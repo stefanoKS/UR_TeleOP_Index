@@ -91,17 +91,18 @@ class Commissioning(Preview):
         if not math.isfinite(self.workspace_radius) or not (self.workspace_radius == 0 or .05 <= self.workspace_radius <= .50):
             raise ValueError('workspace_radius_m must be 0 (disabled) or between 0.05 and 0.50 m')
         self.core.radius = self.workspace_radius if self.workspace_radius else float('inf')
-        self.engineering_required = self.declare_parameter('engineering_required', False,
+        # Deprecated wire input, retained for older launch files; never grants a bypass.
+        self.declare_parameter('engineering_required', False,
             ParameterDescriptor(read_only=True)).value
         encoded = self.declare_parameter('engineering_context', '', ParameterDescriptor(read_only=True)).value
-        from .engineering import Verification
-        self.engineering = Verification(encoded) if encoded else None
-        self.engineering_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='engineering-evidence')
-        self.engineering_future = None
-        self.engineering_checked = -float('inf')
-        self.engineering_parameters = None
-        self.engineering_valid = False
-        self.engineering_reason = 'Initial setup has not been completed. Open Setup Wizard.'
+        from .configuration import Configuration
+        self.configuration = Configuration(encoded) if encoded else None
+        self.configuration_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='configuration-files')
+        self.configuration_future = None
+        self.configuration_checked = -float('inf')
+        self.configuration_parameters = None
+        self.configuration_valid = False
+        self.configuration_reason = 'Waiting for configuration check'
         self.controller_preparation_allowed = False
         self.configure()
         self.add_on_set_parameters_callback(self.on_settings)
@@ -330,7 +331,7 @@ class Commissioning(Preview):
 
     def check_graph(self):
         now = time.monotonic()
-        self.check_engineering(now)
+        self.check_configuration(now)
         # A request lost during service startup/restart must not wedge polling.
         # Readiness expires independently after 0.6 s; retries never renew it.
         for future_name, client, requested_at in (
@@ -435,59 +436,57 @@ class Commissioning(Preview):
         if self.motion_output and self.hardware_smoothing and self.gate.max_joint_speed > self.hardware_smoothing['velocity']:
             problems.append('GUI joint speed exceeds final controller speed limit; lower it or update config and restart')
         if t-self.operator_at >= .5: problems.append('Operator GUI heartbeat missing')
-        if self.engineering_required:
-            if self.engineering is not None and not self.engineering_controller_matches():
-                problems.append('Effective native smoothing limits differ from the engineering startup configuration; inspect configuration and restart')
-            if not self.engineering_ready():
-                problems.append(self.engineering_status_reason())
+        if self.configuration is not None:
+            if self.motion_output and not self.configuration_controller_matches():
+                problems.append('Effective native smoothing limits differ from the startup configuration; inspect configuration and restart')
+            if not self.configuration_ready():
+                problems.append(self.configuration_status_reason())
         else:
-            if not self.get_parameter('alignment_verified').value or self.verified_mapping != tuple(self.get_parameter('tracking_to_robot_rpy_deg').value):
-                problems.append('Confirm direction mapping in GUI')
-            if not self.get_parameter('optical_loss_test_verified').value:
-                problems.append('Perform optical-loss test and confirm in GUI')
+            problems.append('Configuration context missing; use the configured managed launch')
         return problems
 
-    def engineering_values(self):
-        return {k: list(self.get_parameter(k).value) if k == 'tracking_to_robot_rpy_deg'
-                else self.get_parameter(k).value for k in DEFAULTS}
+    def configuration_values(self):
+        return dict({k: list(self.get_parameter(k).value) if k == 'tracking_to_robot_rpy_deg'
+                     else self.get_parameter(k).value for k in DEFAULTS},
+                    base_frame=self.base, tool_frame=self.tool)
 
-    def check_engineering(self, now):
+    def check_configuration(self, now):
         # File I/O and hashing never run on the 100 Hz command executor.
-        if not self.engineering_required or self.engineering is None:
+        if self.configuration is None:
             return
-        if self.engineering_future is not None and self.engineering_future.done():
+        if self.configuration_future is not None and self.configuration_future.done():
             try:
-                self.engineering_valid = self.engineering_future.result()
-                self.engineering_reason = self.engineering.reason
-                self.engineering_parameters = self.engineering_submitted
-                self.engineering_checked = now
+                self.configuration_valid = self.configuration_future.result()
+                self.configuration_reason = self.configuration.reason
+                self.configuration_parameters = self.configuration_submitted
+                self.configuration_checked = now
             except Exception as error:
-                self.engineering_valid = False
-                self.engineering_reason = 'Saved setup could not be checked. Open Advanced Diagnostics.'
-                self.get_logger().error('Setup verification: ' + repr(error))
-            self.engineering_future = None
-        if self.engineering_future is None and now-self.engineering_checked >= .5:
-            self.engineering_submitted = self.engineering_values()
-            self.engineering_future = self.engineering_pool.submit(self.engineering.refresh, self.engineering_submitted)
+                self.configuration_valid = False
+                self.configuration_reason = 'Configuration could not be checked. Open Advanced Diagnostics.'
+                self.get_logger().error('Configuration check: ' + repr(error))
+            self.configuration_future = None
+        if self.configuration_future is None and now-self.configuration_checked >= .5:
+            self.configuration_submitted = self.configuration_values()
+            self.configuration_future = self.configuration_pool.submit(self.configuration.refresh, self.configuration_submitted)
 
-    def engineering_status_reason(self):
-        if self.engineering_valid and not self.engineering_ready():
-            return 'Setup needs checking after a configuration change. Open Setup Wizard if this persists.'
-        return self.engineering_reason
+    def configuration_status_reason(self):
+        if self.configuration_valid and not self.configuration_ready():
+            return 'Waiting for current configuration validation'
+        return self.configuration_reason
 
-    def engineering_controller_matches(self):
-        if not self.hardware_smoothing or self.engineering is None:
+    def configuration_controller_matches(self):
+        if not self.hardware_smoothing or self.configuration is None:
             return False
-        settings = self.engineering.context['settings']
+        settings = self.configuration.context['settings']
         expected = dict(velocity=settings['teleop']['max_joint_speed_rad_s'],
                         acceleration=settings['robot'].get('joint_command_acceleration_rad_s2', 1.),
                         jerk=settings['robot'].get('joint_command_jerk_rad_s3', 10.))
         return all(math.isclose(self.hardware_smoothing[k], v, rel_tol=1e-9)
                    for k, v in expected.items())
 
-    def engineering_ready(self):
-        return (self.engineering_valid and time.monotonic()-self.engineering_checked < 2.
-                and self.engineering_parameters == self.engineering_values())
+    def configuration_ready(self):
+        return (self.configuration_valid and time.monotonic()-self.configuration_checked < 2.
+                and self.configuration_parameters == self.configuration_values())
 
     def tracking_valid(self):
         t = time.monotonic()
@@ -507,8 +506,8 @@ class Commissioning(Preview):
         return ''
 
     def destroy_node(self):
-        if hasattr(self, 'engineering_pool'):
-            self.engineering_pool.shutdown(wait=False, cancel_futures=True)
+        if hasattr(self, 'configuration_pool'):
+            self.configuration_pool.shutdown(wait=False, cancel_futures=True)
         return super().destroy_node()
 
     def arm(self, request, response):
@@ -628,18 +627,17 @@ class Commissioning(Preview):
         self.operator_status.publish(String(data=json.dumps({
             'mode': 'LIVE OUTPUT' if self.motion_output else 'DRY RUN — ROBOT OUTPUT DISABLED',
             'session_id': self.session_id,
-            'engineering_required': self.engineering_required,
+            'configuration_ready': self.configuration_ready(),
             'robot_fault': self.safety_mode is not None and self.safety_mode not in (1, 2),
-            'engineering_verified': self.engineering_ready() if self.engineering_required else False,
-            'engineering_reason': self.engineering_status_reason(),
+            'configuration_reason': self.configuration_status_reason(),
             'setup_feedback_fresh': bool(self.setup_tf_fresh and self.joints_ok and
                 fresh(*self.records.get('joints', (-1e30, 0)), time.monotonic(), now.nanoseconds, self.observation_timeout)),
             'managed_session_id': os.environ.get('UR_TELEOP_MANAGED_SESSION', ''),
             'motion_output_enabled': self.motion_output,
             'command_publisher_present': self.command_pub is not None,
-            'setup_checked': math.isfinite(self.engineering_checked),
+            'setup_checked': math.isfinite(self.configuration_checked),
             'setup_context': self.get_parameter('engineering_context').value,
-            'setup_technical': self.engineering.technical if self.engineering else '',
+            'setup_technical': self.configuration.technical if self.configuration else '',
             'setup_controllers_inactive': not self.motion_output and self.controller_ok,
             'tool_frame': self.tool, 'base_frame': self.base,
             'tracking_valid': self.tracking_valid(),
@@ -683,6 +681,8 @@ class Commissioning(Preview):
                 'clamped': self.core.clamped, 'motion_scale': self.motion_scale,
                 'command_age_s': max(0., (now.nanoseconds-self.records['pose'][1])/1e9) if 'pose' in self.records else None,
             },
+            'measured_joint_velocity': self.joint_velocity.tolist() if self.joint_velocity is not None and self.joints_ok and fresh(*self.records.get('joints', (-1e30, 0)), time.monotonic(), now.nanoseconds, self.observation_timeout) else None,
+            'measured_joint_position': self.joint_values.tolist() if self.joint_values is not None and self.joints_ok and fresh(*self.records.get('joints', (-1e30, 0)), time.monotonic(), now.nanoseconds, self.observation_timeout) else None,
             'stationary': self.joint_velocity is not None and bool(np.max(np.abs(self.joint_velocity)) < .02),
             'observations_healthy': self.observation_healthy,
             'robot_ready': self.robot_mode == 7 and self.safety_mode in (1, 2) and self.program_running,

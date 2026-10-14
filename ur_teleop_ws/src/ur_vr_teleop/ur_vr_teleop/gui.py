@@ -50,6 +50,11 @@ class OperatorGUI:
         self.setup_wizard = None
         self.setup_prompted = False
         self.setup_technical = ''
+        from .sway_recording import Recorder
+        from .preferences import installation_root
+        directory = getattr(manager, 'directory', None)
+        self.recorder = Recorder(installation_root(self.config_path), self.config_path,
+                                 Path(directory)/'effective_config.yaml' if directory else None)
         try:
             saved = json.loads(preference_path(self.config_path).read_text())
             if saved.get('version') == 1:
@@ -59,6 +64,8 @@ class OperatorGUI:
         except (OSError, ValueError, TypeError, KeyError):
             pass
         self.running_values, self.last_status = {}, {}
+        self.native_reference = {}
+        self.native_reference_at = -float('inf')
         self.last_status_at = self.heartbeat_at = -float('inf')
         self.camera_at, self.camera_text, self.camera_window = -float('inf'), 'Camera not connected', None
         self.fields, self.field_rows, self.field_widgets, self._loading_fields = {}, {}, {}, False
@@ -85,7 +92,7 @@ class OperatorGUI:
     def _build(self):
         menu = tk.Menu(self.root)
         settings_menu = tk.Menu(menu, tearoff=False)
-        settings_menu.add_command(label='Recalibrate / Initial Setup', command=self.open_setup)
+        settings_menu.add_command(label='Advanced tuning', command=lambda: (self.advanced_open.set(True), self.toggle_advanced()))
         menu.add_cascade(label='Settings', menu=settings_menu)
         self.root.configure(menu=menu)
         self.root.grid_rowconfigure(1, weight=1); self.root.grid_columnconfigure(0, weight=1)
@@ -127,22 +134,38 @@ class OperatorGUI:
         ttk.Checkbutton(outer,text='Engineering / diagnostics',variable=self.engineering_open,
                         command=self.toggle_engineering).pack(anchor='w')
         self.engineering_panel=self.card(outer,'Engineering tools')
-        ttk.Label(self.engineering_panel,text='Authorized commissioning personnel only. Live requires a verified setup.',style='Muted.TLabel',wraplength=270).pack(anchor='w')
+        ttk.Button(self.engineering_panel,text='Advanced diagnostics / sway recording',command=self.show_history).pack(fill='x')
+        self.record_status = tk.StringVar(value='Recording idle — independent of motion enable')
+        ttk.Label(self.engineering_panel,text='Authorized commissioning personnel only. Review physical configuration before operating a changed workcell.',style='Muted.TLabel',wraplength=270).pack(anchor='w')
         buttons=ttk.Frame(self.engineering_panel,style='Card.TFrame');buttons.pack(fill='x')
         buttons.columnconfigure((0,1),weight=1)
         for i,(label,action,mode) in enumerate([('Preview','start',False),('Live stack','start',True),('Restart ROS','restart',None),('Stop ROS','stop',None)]):
             ttk.Button(buttons,text=label,command=lambda a=action,m=mode:self.stack_action(a,m)).grid(row=i//2,column=i%2,sticky='ew')
+        ttk.Button(self.engineering_panel, text='Optional commissioning observations', command=self.open_setup).pack(fill='x')
         self.servo_button=ttk.Button(self.engineering_panel,text='Start Servo (engineering)',command=lambda:self.call('servo'))
         self.prepare_button=ttk.Button(self.engineering_panel,text='Prepare controller (engineering)',command=self.prepare_controller)
         self.servo_button.pack(fill='x');self.prepare_button.pack(fill='x')
-        self.manual_enable_button=ttk.Button(self.engineering_panel,text='Enable (supervised commissioning)',command=self.toggle_enabled)
-        self.manual_enable_button.pack(fill='x')
-        ttk.Button(self.engineering_panel,text='Advanced diagnostics',command=self.show_history).pack(fill='x')
         # Legacy Preview verification readback remains available to engineers.
         for key in ('controller','joints','pose','optical','alignment','heartbeat','confirmations'):
             value=tk.StringVar(value='Waiting');widget=ttk.Label(self.engineering_panel,textvariable=value,style='Muted.TLabel',wraplength=270)
             self.readiness[key]=(value,widget)
         return outer
+
+    def start_recording(self):
+        if self.recorder.process is not None:
+            return
+        try:
+            directory = getattr(self.manager, 'directory', None)
+            self.recorder.snapshot = Path(directory)/'effective_config.yaml' if directory else None
+            self.recorder.start()
+        except (OSError, ValueError) as error:
+            self.notify('Recording failed: '+str(error), True)
+
+    def toggle_recording(self):
+        if self.recorder.process is None:
+            self.start_recording()
+        else:
+            self.recorder.stop()
 
     def toggle_engineering(self):
         if self.engineering_open.get():self.engineering_panel.pack(fill='x',pady=4)
@@ -182,9 +205,6 @@ class OperatorGUI:
             section.pack(fill='x',pady=2)
         self.alignment=tk.BooleanVar(value=False)
         self.optical=tk.BooleanVar(value=False)
-        for text,variable in [('Mapping directions and tool0 verified in Preview',self.alignment),
-                              ('Optical loss tested with controllers inactive',self.optical)]:
-            ttk.Checkbutton(self.engineering_panel,text=text,variable=variable,command=self.mark_dirty).pack(anchor='w',pady=3)
         self.bind_scroll(self.advanced_body)
         self.bind_scroll(self.canvas)
         return outer
@@ -225,7 +245,23 @@ class OperatorGUI:
             w.pack(side='right'); self.field_rows[spec.key]=row; self.field_widgets[spec.key]=w
 
     def _interfaces(self):
+        from trajectory_msgs.msg import JointTrajectory
+        self.node.create_subscription(JointTrajectory, '/scaled_joint_trajectory_controller/smoothed_command', self.on_native_reference, 1)
         self.clients={key:self.node.create_client(Trigger,name) for key,name in {'arm':'/vr_real/arm','disarm':'/vr_real/disarm','servo':'/vr_real/servo_node/start_servo'}.items()}; self.enable_client=self.node.create_client(SetBool,'/vr_real/set_enabled'); self.switch_client=self.node.create_client(SwitchController,'/controller_manager/switch_controller'); self.settings=self.node.create_client(SetParametersAtomically,'/vr_real/teleop/set_parameters_atomically'); self.heartbeat=self.node.create_publisher(Bool,'/vr_real/operator_present',1); self.node.create_subscription(String,'/vr_real/operator_status',self.on_status,1); self.node.create_subscription(String,'/wrist_camera/status',self.on_camera_status,1)
+
+    def on_native_reference(self, msg):
+        from .validation import JOINTS
+        if len(msg.points) != 1 or len(msg.joint_names) != 6 or set(msg.joint_names) != set(JOINTS):
+            return
+        p = msg.points[0]
+        if len(p.positions) != 6 or len(p.velocities) != 6 or not all(math.isfinite(v) for v in [*p.positions, *p.velocities]):
+            return
+        age = (self.node.get_clock().now().nanoseconds-(msg.header.stamp.sec*10**9+msg.header.stamp.nanosec))/1e9
+        if not 0 <= age < .25:
+            return
+        order = [msg.joint_names.index(j) for j in JOINTS]
+        self.native_reference = {'position': [p.positions[j] for j in order], 'velocity': [p.velocities[j] for j in order]}
+        self.native_reference_at = time.monotonic()
 
     def on_camera_status(self,msg): self.camera_at,self.camera_text=time.monotonic(),msg.data
     def open_camera(self):
@@ -265,11 +301,6 @@ class OperatorGUI:
         self.load_running(value)
         if self.setup_wizard is not None:
             self.setup_wizard.observe(value, self.last_status_at)
-        if (not self.setup_prompted and value.get('engineering_required') is True
-                and value.get('engineering_verified') is False and value.get('setup_checked') is True
-                and value.get('setup_context')):
-            self.setup_prompted = True
-            self.open_setup()
         if self.confirmation_pending is not None:
             if all(boolean(value,k)==v for k,v in self.confirmation_pending.items()):
                 self.confirmation_pending=None
@@ -348,6 +379,10 @@ class OperatorGUI:
     def show_history(self):
         window=tk.Toplevel(self.root)
         window.title('Advanced diagnostics / recent operator actions')
+        row = ttk.Frame(window); row.pack(fill='x')
+        ttk.Button(row, text='RECORD SWAY DIAGNOSTICS', command=self.start_recording).pack(side='left')
+        ttk.Button(row, text='STOP RECORDING', command=self.recorder.stop).pack(side='left')
+        ttk.Label(window, textvariable=self.record_status, wraplength=850).pack(anchor='w')
         ttk.Label(window, text=str(self.last_status.get('setup_technical', ''))+'\n'+self.setup_technical, wraplength=850).pack()
         text=tk.Text(window,width=100,height=20,wrap='word')
         text.pack(fill='both',expand=True)
@@ -415,14 +450,14 @@ class OperatorGUI:
         else:
             self.setup_wizard.window.lift()
 
-    def start_teleop(self, supervised=False):
+    def start_teleop(self):
         if self.retiring_startup or self.startup_request or self.uncertain_enable_session == self.session and self.session is not None:
             self.notify('Waiting for canceled startup to retire. An enable timeout requires Restart ROS.',True)
             return
         if self.pending or self.parameters.pending:
             self.notify('Wait for the current engineering/settings request to finish.',True)
             return
-        if self.startup.start(self.session, supervised=supervised):
+        if self.startup.start(self.session):
             self.heartbeat_allowed=True
 
     def stop_teleop(self):
@@ -485,22 +520,6 @@ class OperatorGUI:
             except Exception as error:
                 self.startup.acknowledge(action,False,str(error),now)
 
-    def toggle_enabled(self):
-        if self.startup.requested:return
-        if self.last_status.get('engineering_required') is not False:
-            self.notify('Use START TELEOP; manual Enable requires an explicit engineering session.',True);return
-        if self.request_busy('enable'):return
-        if self.stale() or boolean(self.last_status,'enable_requested') is None or not self.enable_client.service_is_ready():
-            self.notify('Enable service/status unavailable',True);return
-        self.heartbeat_allowed=True
-        self.heartbeat.publish(Bool(data=True))
-        r=SetBool.Request();r.data=not self.last_status['enable_requested']
-        try:
-            self.track_request('enable',self.enable_client.call_async(r),r.data)
-            self.notify(('Enable' if r.data else 'Disable')+': waiting for backend')
-        except Exception as error:
-            self.notify('Enable: '+str(error),True)
-
     def field_values(self):
         self.sync_draft()
         return self.parameters.values()
@@ -534,7 +553,6 @@ class OperatorGUI:
             restart=not equivalent(values['max_joint_speed_rad_s'],self.parameters.effective['max_joint_speed_rad_s'])
             if restart and not save:raise ValueError('Joint speed requires Apply + save, then Restart ROS.')
             applied.pop('max_joint_speed_rad_s',None)
-            applied.update(alignment_verified=self.alignment.get(),optical_loss_test_verified=self.optical.get())
             r=SetParametersAtomically.Request()
             r.parameters=[Parameter(name,value=value).to_parameter_msg() for name,value in applied.items()]
             future=self.settings.call_async(r)
@@ -642,7 +660,7 @@ class OperatorGUI:
         self.stack_status.set('Live stack connected' if mode.startswith('LIVE') else 'Engineering Preview connected')
         self.header_mode.set('LIVE' if mode.startswith('LIVE') else 'PREVIEW' if 'DRY RUN' in mode else mode)
         ready=boolean(d,'motion_ready');armed=boolean(d,'armed')
-        if any(boolean(d,key) is None for key in ('armed','enable_requested','alignment_verified','optical_loss_test_verified','operator_heartbeat_fresh')):
+        if any(boolean(d,key) is None for key in ('armed','enable_requested','configuration_ready','operator_heartbeat_fresh')):
             ready=armed=None
         self.header_state.set('TELEOP ACTIVE' if armed is True and d.get('clutch')=='ACTIVE' else 'READY' if armed is True and ready is True else 'WAITING')
         fault=boolean(d,'servo_status_fresh') is True and type(d.get('servo')) is int and d['servo'] in (2,4,5)
@@ -665,6 +683,14 @@ class OperatorGUI:
         a_text={True:'held',False:'released',None:'Unknown'}[boolean(d,'a_held')]
         servo=d.get('servo_detail','Unavailable') if boolean(d,'servo_status_fresh') is True else 'Stale / Unavailable'
         self.diagnostics.set('Published TCP command: '+vector_text(vector(diag,'published_twist'))+'\nMeasured TCP estimate (TF): '+vector_text(vector(diag,'measured_tcp_velocity'))+f"\nServo: {servo}\nClutch: {d.get('clutch','Unavailable')} | A: {a_text}")
+        native = self.native_reference if time.monotonic()-self.native_reference_at < .25 else {}
+        measured = vector(d, 'measured_joint_velocity')
+        actual_q = vector(d, 'measured_joint_position')
+        reference_q = vector(native, 'position')
+        error = [a-b for a,b in zip(reference_q, actual_q)] if reference_q is not None and actual_q is not None else None
+        joint_text = lambda v: 'Unavailable' if v is None else ', '.join(f'{x:.3g}' for x in v)
+        self.diagnostics.set(self.diagnostics.get()+'\nFinal joint command (rad/s): '+joint_text(vector(native, 'velocity'))+
+                             '\nMeasured joints (rad/s): '+joint_text(measured)+'\nJoint tracking error (rad): '+joint_text(error))
         tracking=boolean(d,'tracking_valid')
         count=d.get('active_station_count')
         tracking_text=('TRACKING VALID — '+str(count)+' LIGHTHOUSE'+('S' if count!=1 else '')) if tracking is True and type(count) is int and count>0 else 'TRACKING: LOST' if self.startup.enabled else 'TRACKING: WAITING'
@@ -692,6 +718,7 @@ class OperatorGUI:
                     self._manager_message=message
                     self.notify('ROS: '+message,any(word in message.lower() for word in ('failed','exited','error')))
             except queue.Empty:pass
+        self.record_status.set(self.recorder.poll())
         now=time.monotonic()
         if now-self.heartbeat_at>=.1:
             self.heartbeat.publish(Bool(data=self.heartbeat_allowed));self.heartbeat_at=now
@@ -716,7 +743,6 @@ class OperatorGUI:
         self.prepare_button.state(['disabled'] if disabled or d.get('enable_requested') or busy or self.startup.requested else ['!disabled'])
         hardware=d.get('hardware_smoothing') if not stale else None
         limit=hardware.get('velocity') if isinstance(hardware,dict) else None
-        self.manual_enable_button.state(['!disabled'] if not stale and d.get('engineering_required') is False and not self.startup.requested else ['disabled'])
         effective=d.get('effective_parameters',{}) if not stale else {}
         self.active_limit.set('Effective TCP caps: '+str(effective.get('max_linear_speed_m_s','?'))+' m/s; '+str(effective.get('max_angular_speed_deg_s','?'))+' deg/s\nActive final joint limit: '+(f'{limit:g} rad/s' if type(limit) in (float,int) and math.isfinite(limit) else 'Unavailable')+('\nSaved for restart: '+str(self.parameters.restart['max_joint_speed_rad_s'])+' rad/s' if self.parameters.restart else ''))
         blockers=d.get('blockers',[])
@@ -730,6 +756,9 @@ class OperatorGUI:
         self.closed=True
         try:
             if getattr(self,'setup_wizard',None) is not None:self.setup_wizard.close(stop=False)
+            if getattr(self, 'recorder', None):
+                import threading
+                threading.Thread(target=self.recorder.close, name='recorder-shutdown', daemon=False).start()
             if getattr(self,'startup',None):self.startup.stop()
             if getattr(self,'startup_request',None):
                 _,future,client,_,_=self.startup_request

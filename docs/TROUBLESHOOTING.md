@@ -25,7 +25,7 @@ A one-shot echo can wait indefinitely if its topic is absent; use Ctrl+C. A high
 
 | Symptom | Likely cause | Diagnostic command | Corrective action |
 |---|---|---|---|
-| A does not engage | Held through fault, not enabled, invalid Joy, failed confirmations | `ros2 topic echo /vr/controller/joy --once` and `ros2 topic echo /vr_real/operator_status --once` | Release A, resolve the displayed cause, wait for healthy readiness, then press again. A is buttons[4]. |
+| A does not engage | Held through fault, not enabled, invalid Joy, invalid configuration | `ros2 topic echo /vr/controller/joy --once` and `ros2 topic echo /vr_real/operator_status --once` | Release A, resolve the displayed cause, wait for healthy readiness, then press again. A is buttons[4]. |
 | GUI says motion not ready | Tracking/TF/joints, heartbeat, program, speed scale, Servo, controller, or watchdog check | `ros2 topic echo /vr_real/operator_status --once` | Address the named condition; do not fabricate healthy state messages. |
 | Scaled controller inactive | Startup intentionally leaves it inactive | `ros2 control list_controllers -c /controller_manager` | In authorized Live setup, use Prepare controller after prerequisites pass. Preview must not activate motion controllers. |
 | Competing controller or command source | Another position claimant/publisher/action exists | `ros2 topic info /scaled_joint_trajectory_controller/joint_trajectory --verbose` and controller listing | Identify the owner and shut down the conflicting session deliberately. GUI Prepare does not evict it. |
@@ -76,7 +76,7 @@ The desktop uses ownership metadata and process groups to stop its own children.
   source the updated `ur_vr_teleop` package in both backend and GUI processes;
   an older backend's partial aliases are deliberately not assumed complete.
 - **Applied — awaiting readback:** service acceptance arrived, but a complete
-  matching snapshot or session confirmation has not. Check fresh status and
+  matching configuration snapshot has not. Check fresh status and
   backend/session identity. After timeout, review/revert fresh values before
   retrying; a timeout does not undo an accepted request.
 - **External parameter changes:** the draft was preserved. Revert to confirmed
@@ -84,10 +84,6 @@ The desktop uses ownership metadata and process groups to stop its own children.
 - **Applied to current session, but saving failed:** inspect the full action
   history for the filesystem error. Current runtime values are retained; repair
   the preference-directory problem and explicitly Apply + Save again.
-- **Pending application / Not verified:** local checkboxes are not backend
-  approval. Read `alignment_verified` and `optical_loss_test_verified`. A changed
-  mapping can invalidate the effective flag even if the raw ROS boolean remains
-  true. Repeat the manual commissioning procedure before checking/applying.
 - **Restart required:** compare active final limit with the separate saved value;
   perform the explicit supervised restart workflow and verify both readbacks.
 
@@ -100,7 +96,7 @@ its unknown-state behavior.
 
 | Display | Action |
 |---|---|
-| Initial setup required / Open Setup Wizard | Open Settings → Recalibrate / Initial Setup. Missing, corrupt or changed setup blocks routine motion. Advanced Diagnostics shows the underlying exception. Follow the [wizard guide](INITIAL_SETUP.md); no manual JSON or expiry management is needed. |
+| Configuration unavailable | Inspect the exact backend reason: explicit RPY mapping, frames, robot IP/calibration, tracking file or typed tuning. A missing historical evidence file alone does not block Start. |
 | Waiting for External Control | Start the correct program on the pendant; application never issues Play |
 | Robot safety state / FAULT | Inspect pendant and follow site recovery; no automatic fault reset/protective-stop release |
 | Waiting for valid VR tracking | Inspect valid 6-DoF pose/continuity and TF/joints in Advanced diagnostics; one calibrated station is sufficient, but optical signal alone is not |
@@ -108,7 +104,11 @@ its unknown-state behavior.
 | Service unavailable/rejected | Inspect exact stage and service/driver logs; fix the cause and press START for one controlled retry |
 | Enable timed out; outcome unknown | STOP remains active; use Engineering Restart ROS, then a fresh START after status returns |
 | Servo previously started but status lost | Inspect/recover solver; startup will not create or start a duplicate solver |
-| Effective limits mismatch | Compare visible active values and controller readback; native limits need restart; approval must cover the actual envelope |
+| Effective limits mismatch | Compare visible active values and controller readback; native limits need restart; review the actual envelope physically before operation |
 | Tracking restored but no movement | Release A, wait for healthy stationary readiness, then make a fresh press |
 
-For temporary rollback to the prior supervised workflow, see [Engineering and rollback](OPERATION.md#engineering-and-rollback). The domain-42 simulator remains available; no physical robot session is needed for automated tests.
+For Preview and optional observations, see [Engineering and rollback](OPERATION.md#engineering-and-rollback). The domain-42 simulator remains available; no physical robot session is needed for automated tests.
+
+## Sway after hand motion stops
+
+Use **RECORD SWAY DIAGNOSTICS**, then the [offline analyzer](SWAY_DIAGNOSTICS.md). Compare hand/Twist, Servo, final native reference and feedback before changing a controller. Null metrics mean unavailable data, inadequate observation duration or an ambiguous signal. Do not increase gain, speed, acceleration or jerk to mask oscillation. A recording failure appears in the recorder log; a second recorder is rejected by the shared lock. An interrupted/incomplete bag must not be treated as complete evidence.

@@ -19,7 +19,7 @@ def test_launch_record_policy_is_explicit_and_context_is_ros_string(monkeypatch,
     action=module.nodes(ctx)[1]
     params={}
     for entry in evaluate_parameters(ctx,action._Node__parameters):params.update(entry)
-    assert params['engineering_required'] is required
+    assert 'engineering_required' not in params
     assert params['motion_output_enabled'] is (live=='true')
     assert params['alignment_verified'] is False and params['optical_loss_test_verified'] is False
     assert type(params['engineering_context']) is str
