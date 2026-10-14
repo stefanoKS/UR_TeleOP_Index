@@ -13,7 +13,8 @@ def ready(**changes):
                      configuration_ready=True, robot_preparation_ready=True,
                      tracking_valid=True, observations_healthy=True, stationary=True,
                      controller_state_fresh=True, controller_ready=False,
-                     controller_preparation_allowed=True, servo_status_fresh=False,
+                     controller_preparation_allowed=True,
+                     servo_process_present=True, servo_status_seen=False, servo_status_fresh=False,
                      motion_ready=False), **changes)
 
 
@@ -131,11 +132,91 @@ def test_unknown_enable_outcome_requires_new_session():
     assert not g.startup.requested
 
 
-def test_servo_previously_started_but_stale_is_not_started_twice():
+def test_servo_stale_is_restarted_once_then_fails_instead_of_waiting():
+    # A previously started Servo whose status expired must not wedge startup: the workflow
+    # attempts exactly one bounded recovery, then fails with the exact instruction.
     s=workflow()
-    d=ready(controller_ready=True,servo_started=True,servo_status_fresh=False)
+    d=ready(controller_ready=True,servo_status_seen=True,servo_process_present=True,servo_status_fresh=False)
+    assert s.step(d,True,0)=='servo'
+    assert s.stage=='RESTARTING SERVO'
+    s.acknowledge('servo',True,'',0)
+    assert s.step(d,True,1) is None
+    assert s.stage=='WAITING — SERVO STATUS'
+    assert s.step(d,True,6) is None        # Deadline expired: never wait forever.
+    assert s.state=='ERROR'
+    assert 'Restart ROS' in s.message
+    assert s.last_failure['stage']=='WAITING — SERVO STATUS'
+
+
+def test_servo_absent_fails_with_restart_instruction():
+    s=workflow()
+    d=ready(controller_ready=True,servo_process_present=False,servo_status_seen=False,servo_status_fresh=False)
     assert s.step(d,True,0) is None
-    assert 'status lost' in s.message
+    assert s.state=='ERROR' and 'not running' in s.message and 'Restart ROS' in s.message
+
+
+def test_servo_start_then_fresh_status_reaches_enable():
+    s=workflow();d=ready(controller_ready=True)
+    assert s.step(d,True,0)=='servo'
+    assert s.stage=='STARTING SERVO'
+    s.acknowledge('servo',True,'',0)
+    d.update(servo_status_fresh=True,motion_ready=True)
+    assert s.step(d,True,1)=='enable'
+    s.acknowledge('enable',True,'',1)
+    d.update(enable_requested=True,armed=True)
+    assert s.step(d,True,2) is None and s.state=='READY'
+
+
+def test_servo_start_timeout_reports_unknown_outcome():
+    s=workflow();d=ready(controller_ready=True)
+    assert s.step(d,True,0)=='servo'
+    assert s.step(d,True,6) is None
+    assert s.state=='ERROR' and 'outcome unknown' in s.message
+    assert s.last_failure['stage']=='STARTING SERVO'
+
+
+def test_controller_readback_unconfirmed_fails_not_indefinite():
+    s=workflow();d=ready()
+    assert s.step(d,True,0)=='prepare'
+    s.acknowledge('prepare',True,'',0)
+    assert s.step(d,True,1) is None
+    assert s.stage=='WAITING — CONTROLLER READBACK'
+    assert s.step(d,True,6) is None
+    assert s.state=='ERROR' and 'not confirmed' in s.message
+
+
+@pytest.mark.parametrize('changes,stage',[
+    ({'a_held':True},'WAITING — RELEASE A'),
+    ({'configuration_ready':False},'WAITING — CONFIGURATION'),
+    ({'robot_preparation_ready':False,
+      'robot_preparation_reason':'Start the External Control program on the pendant'},'WAITING — EXTERNAL CONTROL'),
+    ({'robot_preparation_ready':False,
+      'robot_preparation_reason':'Robot mode / safety state blocks startup'},'WAITING — ROBOT MODE'),
+    ({'tracking_valid':False},'WAITING — INVALID TRACKING'),
+    ({'stationary':False},'WAITING — ROBOT STANDSTILL'),
+    ({'controller_state_fresh':False},'WAITING — ROBOT CONTROLLER'),
+    ({'controller_preparation_allowed':False},'WAITING — CONTROLLER CONFLICT')])
+def test_each_waiting_stage_is_reported(changes,stage):
+    s=workflow();d=ready(**changes)
+    assert s.step(d,True,0) is None
+    assert s.stage==stage
+
+
+def test_failed_service_records_stage_and_exact_detail():
+    s=workflow();d=ready()
+    assert s.step(d,True,0)=='prepare'
+    s.acknowledge('prepare',False,'scaled_joint_trajectory_controller could not be activated',1)
+    assert s.state=='ERROR'
+    assert s.last_failure['stage']=='PREPARING CONTROLLER'
+    assert 'could not be activated' in s.last_failure['message']
+
+
+def test_previously_stale_servo_is_reported_as_unhealthy_not_ready():
+    s=workflow();d=ready(controller_ready=True,servo_status_seen=True,servo_status_fresh=False)
+    assert s.step(d,True,0)=='servo'
+    s.acknowledge('servo',True,'',0)
+    d.update(servo_status_fresh=True,motion_ready=True)
+    assert s.step(d,True,1)=='enable'  # Fresh status clears the stale condition.
 
 
 def test_missing_historical_record_does_not_block_configured_start():

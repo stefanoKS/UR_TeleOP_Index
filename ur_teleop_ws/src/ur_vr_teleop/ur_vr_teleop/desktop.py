@@ -139,6 +139,7 @@ class ProcessManager:
         self.log_offsets = {}
         self.log_fragments = {}
         self.last_log_check = -float('inf')
+        self.crash_counts = {}
 
     def commands(self, live):
         from ament_index_python.packages import get_package_share_directory
@@ -297,20 +298,30 @@ class ProcessManager:
             self.log_fragments[name] = lines.pop()[-4096:]
             for line in lines:
                 if ('[ERROR]' in line and ('process has died' in line or 'Caught exception in launch' in line)):
-                    return name + ': ' + line[-600:]
+                    return name + ': ' + line[-600:] + ' (log: ' + str(path) + ')'
         return None
+
+    def record_crash(self, names):
+        # Expose the process name, exit reason and log path; flag repeated failures.
+        for name in names:
+            self.crash_counts[name] = self.crash_counts.get(name, 0) + 1
+        repeats = ', '.join(f'{name} x{count}' for name, count in self.crash_counts.items() if count > 1)
+        return ' Repeated crashes: ' + repeats + '.' if repeats else ''
 
     def poll(self):
         self.scan_owned()
         if not self.stopping:
             failed = [name for name, p in self.children.items() if name not in ('rviz', 'camera') and p.poll() is not None]
             if failed:
-                self.message = 'Process exited: '+', '.join(failed)+'. Stack stopped; inspect logs, then use Restart ROS.'
+                reasons = ', '.join(f'{name}(exit {self.children[name].returncode})' for name in failed)
+                self.message = ('Process exited: ' + reasons + '. Stack stopped; logs: ' + str(self.directory)
+                                + '.' + self.record_crash(failed) + ' Inspect the failing component, then use Restart ROS.')
                 self.stop()
             else:
                 failure = self.child_log_failure()
                 if failure:
-                    self.message = 'ROS child failed; owned stack stopped. '+failure
+                    self.message = ('ROS child failed; owned stack stopped. ' + failure
+                                    + '.' + self.record_crash([failure.split(':', 1)[0]]))
                     self.stop()
         if self.stopping:
             age = time.monotonic()-self.stop_started

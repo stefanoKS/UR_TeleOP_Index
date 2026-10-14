@@ -13,6 +13,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory
+from std_msgs.msg import Int8
 from std_srvs.srv import Trigger
 from launch import LaunchContext
 from launch_ros.utilities import evaluate_parameters
@@ -56,6 +57,8 @@ try:
         trajectories.append((msg, source, node.get_clock().now().nanoseconds))
     node.create_subscription(JointTrajectory, '/vr_real/servo_joint_targets', received, 10)
     start = node.create_client(Trigger, '/vr_real/servo_node/start_servo')
+    servo_status = []
+    node.create_subscription(Int8, '/vr_real/servo_node/status', lambda m: servo_status.append(m.data), 10)
     q = [0., -1.2, 1.6, -1.97, -1.57, 0.]
     def pump(seconds, move=False):
         until = time.monotonic()+seconds
@@ -72,10 +75,15 @@ try:
             if any(p.poll() is not None for p in processes):
                 raise RuntimeError('Child exited; inspect '+str(directory/'processes.log'))
     pump(3.)
+    # Verified against the installed MoveIt Servo 2.5.x: the status publisher exists as soon
+    # as the process starts, but status is only published once start_servo begins its loop.
+    assert node.count_publishers('/vr_real/servo_node/status') == 1, 'Servo status publisher missing'
+    assert not servo_status, 'Servo must not report status before start_servo'
     assert start.service_is_ready(), 'Servo start service missing'
     future = start.call_async(Trigger.Request())
     pump(2.)
     assert future.done() and future.result().success, 'Servo did not start'
+    assert servo_status and servo_status[-1] in (0, 1, 3, 6), 'Servo status not fresh/warning-free after start'
     trajectories.clear()
     pump(2., move=True)
     assert len(trajectories) >= 10, 'No meaningful Servo output'

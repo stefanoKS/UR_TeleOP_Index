@@ -79,6 +79,8 @@ Native velocity, acceleration, jerk, following-error, period, and finite-state c
 
 Readiness combines tracking/TF/joint freshness, robot RUNNING state, safety NORMAL or REDUCED state, External Control program running, nonzero speed scaling, Servo state, controller ownership, command watchdog verification, GUI heartbeat, and current configuration integrity (explicit mapping, calibrated robot model, frames and typed tuning). REDUCED does not disable the robot's independent limits. Servo codes 2, 4, and 5 block motion; permitted codes 0, 1, 3, and 6 retain Servo's corresponding behavior. Unknown or stale status blocks.
 
+Servo status carries an explicit lifecycle rather than a permanent historical flag. The backend reports `servo_process_present` (the `status` publisher exists; the process is up even before it is started), `servo_status_seen` (a status has arrived this session) and `servo_status_fresh` (received within 250 ms — MoveIt Servo publishes at `1/publish_period`, about 100 Hz, only after `start_servo` runs its loop). `servo_state` is `absent`, `unstarted`, `running`, `stale` or `stopped`. A stale status is never healthy; the startup coordinator attempts at most one bounded restart before reporting the exact Restart ROS instruction. See [status contract](OPERATOR_STATUS.md#v4-authoritative-readiness-and-coordinator).
+
 Controller discovery must show the scaled controller as the sole position claimant in live operation. Dry-run expects motion controllers inactive. The configured controller command watchdog must be in the accepted **0.10–0.25 s** interval, with `constraints.goal_time` below it. Listing and parameter checks are not replaced by a GUI label.
 
 ```mermaid

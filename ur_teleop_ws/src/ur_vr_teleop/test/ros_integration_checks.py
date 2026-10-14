@@ -73,6 +73,7 @@ def healthy(n):
     t = time.monotonic()
     n.optical_since = t-1.
     n.servo_status, n.servo_at = 0, t
+    n.servo_seen, n.servo_present, n.servo_present_at = True, True, t
     n.controller_ok, n.controller_at = True, t
     n.smoothing_controller_present = True
     n.hardware_smoothing = dict(velocity=.5, acceleration=1., jerk=10.)
@@ -858,6 +859,41 @@ def test_dashboard_readback_and_confirmations_match_actual_backend(node):
     assert not payload['alignment_verified']  # Parameter bool alone would still be true.
     assert node.get_parameter('alignment_verified').value
     assert node.command_pub is None
+
+
+def test_servo_lifecycle_reports_present_fresh_and_stale_without_a_sticky_flag(node):
+    node.operator_status = Mock()
+    # Process absent and never started: not running and not healthy.
+    node.servo_at, node.servo_seen = -float('inf'), False
+    node.servo_present, node.servo_present_at = False, time.monotonic()
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['servo_state'] == 'absent' and payload['servo_process_present'] is False
+    assert payload['servo_status_fresh'] is False and payload['servo_status_seen'] is False
+    assert 'servo_started' not in payload
+    # Process exists but Servo has not been started (no status yet).
+    node.servo_present, node.servo_present_at = True, time.monotonic()
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['servo_state'] == 'unstarted' and payload['servo_process_present'] is True
+    # Started and looping.
+    node.servo_seen, node.servo_at = True, time.monotonic()
+    node.servo_present, node.servo_present_at = True, time.monotonic()
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['servo_state'] == 'running' and payload['servo_status_fresh'] is True
+    # A single old status must never keep the lifecycle healthy for the whole session.
+    node.servo_at = time.monotonic()-1.
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['servo_state'] == 'stale' and payload['servo_status_fresh'] is False
+    assert any('Servo status stale' in r for r in node.reasons())
+    # Process disappears after having run.
+    node.servo_present, node.servo_present_at = False, time.monotonic()
+    node.tick()
+    payload = json.loads(node.operator_status.publish.call_args.args[0].data)
+    assert payload['servo_state'] == 'stopped'
+    assert any('Servo process stopped' in r for r in node.reasons())
 
 
 def test_missing_configuration_blocks_even_with_legacy_flags(node):

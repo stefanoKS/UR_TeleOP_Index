@@ -42,7 +42,8 @@ def run():
             optical_loss_test_verified=backend.get_parameter('optical_loss_test_verified').value,
             effective_parameters={k:list(backend.get_parameter(k).value) if isinstance(v,list) else backend.get_parameter(k).value for k,v in DEFAULTS.items()},
             hardware_smoothing={'velocity':.5},optical=True,optical_stations={'0':0,'1':1},pose_fresh=True,
-            tracking_rejection='none',servo_detail='Ready',clutch='READY',teleop_control_mode='velocity',
+            tracking_rejection='none',servo_detail='Ready',servo_state='running',servo_process_present=True,
+            servo_status_seen=True,clutch='READY',teleop_control_mode='velocity',
             velocity_diagnostics={'published_twist':[0.]*6,'measured_tcp_velocity':None},
             motion_metrics_current=False,blockers=['External Control program is not running'],reason='Disarmed')
     def pump(seconds=.4,publish=True):
@@ -128,6 +129,35 @@ def run():
         rejected[0]=True;gui.alignment.set(True);gui.apply();pump()
         assert 'Not verified — request rejected' in gui.readiness['alignment'][0].get()
         rejected[0]=False;gui.alignment.set(False)
+        # A held with the gate disarmed must never be shown as an active robot clutch.
+        gui.update_dashboard(False,dict(status(),armed=False,a_held=True,clutch='ACTIVE',motion_ready=False))
+        assert 'Clutch (effective): DISARMED' in gui.diagnostics.get()
+        assert 'A held, no motion authorization' in gui.diagnostics.get()
+        assert 'A button (VR input): held' in gui.diagnostics.get()
+        assert 'Backend motion authorization: disarmed' in gui.diagnostics.get()
+        gui.update_dashboard(False,dict(status(),armed=True,a_held=True,clutch='ACTIVE',motion_ready=True))
+        assert 'Clutch (effective): ACTIVE' in gui.diagnostics.get()
+        # Servo lifecycle is displayed explicitly and a stale status is never healthy.
+        gui.update_dashboard(False,dict(status(),servo_status_fresh=False,servo_state='stale'))
+        assert 'Stale — started but no fresh status' in gui.diagnostics.get()
+        gui.update_dashboard(False,dict(status(),servo_status_fresh=False,servo_state='stopped'))
+        assert 'Stopped — process no longer publishing status' in gui.diagnostics.get()
+        gui.update_dashboard(False,dict(status(),servo_status_fresh=False,servo_state='absent'))
+        assert 'Absent — Servo process not running' in gui.diagnostics.get()
+        gui.update_dashboard(False,status())
+        # Distinct backend session IDs are counted and surfaced as a duplicate-backend risk.
+        session[0]='integration-restart'
+        backend.set_parameters_atomically([Parameter('alignment_verified',value=False)])
+        pump()
+        assert 'integration-restart' in gui.session_ids and gui.session_changes>=1
+        assert gui.startup_stage.get()=='SESSION CHANGED — PRESS START TELEOP'
+        assert not gui.startup.requested
+        # Frequent session changes are reported as a duplicate-backend risk.
+        session[0]='integration-restart-2'
+        backend.set_parameters_atomically([Parameter('alignment_verified',value=False)])
+        pump()
+        assert len(set(gui.session_ids))>=2 and gui.session_changes>=2
+        assert 'backend session IDs' in gui.session_warning()
         # Malformed optional diagnostics remain unknown, never zero or green.
         malformed=dict(status(),velocity_diagnostics=['bad'],optical_stations=None,pose_fresh=None,alignment_verified=None)
         gui.update_dashboard(False,malformed)
@@ -145,7 +175,8 @@ def run():
         from std_srvs.srv import Trigger, SetBool
         backend.set_parameters_atomically([Parameter('max_joint_speed_rad_s',value=.7)])
         state=dict(hardware_smoothing={'velocity':.7,'acceleration':1.,'jerk':10.},controller_ready=False,controller_preparation_allowed=True,
-                   servo_status_fresh=False,motion_ready=False,enable_requested=False,armed=False)
+                   servo_status_fresh=False,servo_state='unstarted',servo_process_present=True,servo_status_seen=False,
+                   motion_ready=False,enable_requested=False,armed=False)
         calls=[]
         original_status=status
         def status():

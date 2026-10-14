@@ -5,6 +5,7 @@ import os
 import queue
 import time
 import tkinter as tk
+from collections import deque
 from pathlib import Path
 from tkinter import ttk
 
@@ -40,9 +41,15 @@ class OperatorGUI:
         self.startup_request = None
         self.retiring_startup = False
         self.uncertain_enable_session = None
+        self.uncertain_servo_session = None
         self.heartbeat_allowed = False
         self.session = None
         self.generation = 0
+        # Backend session identity: distinct IDs and change rate expose duplicate backends.
+        self.session_ids = []
+        self.session_changes = 0
+        self.session_events = deque(maxlen=20)
+        self.session_restart = False
         self.confirmation_rejected = False
         self.confirmation_pending = None
         self.settings_result = ''
@@ -95,18 +102,30 @@ class OperatorGUI:
         settings_menu.add_command(label='Advanced tuning', command=lambda: (self.advanced_open.set(True), self.toggle_advanced()))
         menu.add_cascade(label='Settings', menu=settings_menu)
         self.root.configure(menu=menu)
-        self.root.grid_rowconfigure(1, weight=1); self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(2, weight=1); self.root.grid_columnconfigure(0, weight=1)
         header = tk.Frame(self.root, bg=COLORS['navy'], height=64); header.grid(row=0, column=0, sticky='ew'); header.grid_propagate(False); header.grid_columnconfigure(1, weight=1)
         tk.Label(header, text='UR10e TELEOPERATION', bg=COLORS['navy'], fg='white', font=('DejaVu Sans', 19, 'bold')).grid(row=0, column=0, padx=20, pady=12)
         self.header_mode, self.header_state = tk.StringVar(value='DISCONNECTED'), tk.StringVar(value='WAITING FOR GATE')
         tk.Label(header, textvariable=self.header_mode, bg=COLORS['navy'], fg='#BFDBFE', font=('DejaVu Sans', 11, 'bold')).grid(row=0, column=1, sticky='e', padx=12)
         self.header_badge = tk.Label(header, textvariable=self.header_state, bg=COLORS['navy'], fg=COLORS['muted'], font=('DejaVu Sans', 11, 'bold'))
         self.header_badge.grid(row=0, column=2, sticky='e', padx=20)
-        content = ttk.Frame(self.root, style='App.TFrame', padding=12); content.grid(row=1, column=0, sticky='nsew')
+        # Prominent startup banner: current stage, blocker and any previous failure.
+        self.banner = tk.Frame(self.root, bg=COLORS['amber'])
+        self.banner.grid(row=1, column=0, sticky='ew')
+        self.startup_stage = tk.StringVar(value='DISARMED — PRESS START TELEOP')
+        self.startup_detail = tk.StringVar(value='')
+        self.banner_label = tk.Label(self.banner, textvariable=self.startup_stage, bg=COLORS['amber'],
+                                     fg='white', font=('DejaVu Sans', 13, 'bold'), anchor='w')
+        self.banner_label.pack(side='left', padx=15, pady=5)
+        self.banner_detail = tk.Label(self.banner, textvariable=self.startup_detail, bg=COLORS['amber'],
+                                      fg='white', font=('DejaVu Sans', 10), anchor='w', justify='left',
+                                      wraplength=1000)
+        self.banner_detail.pack(side='left', fill='x', expand=True, padx=8)
+        content = ttk.Frame(self.root, style='App.TFrame', padding=12); content.grid(row=2, column=0, sticky='nsew')
         for c, weight, minimum in ((0,25,285),(1,35,365),(2,40,490)): content.grid_columnconfigure(c, weight=weight, minsize=minimum)
         content.grid_rowconfigure(0, weight=1)
         self.operations(content).grid(row=0,column=0,sticky='nsew',padx=(0,8)); self.monitoring(content).grid(row=0,column=1,sticky='nsew',padx=4); self.tuning(content).grid(row=0,column=2,sticky='nsew',padx=(8,0))
-        strip = tk.Frame(self.root, bg='#E8EEF6'); strip.grid(row=2,column=0,sticky='ew'); strip.grid_columnconfigure(0,weight=1)
+        strip = tk.Frame(self.root, bg='#E8EEF6'); strip.grid(row=3,column=0,sticky='ew'); strip.grid_columnconfigure(0,weight=1)
         self.message = tk.StringVar(value='')
         self.live_message = tk.StringVar(value='Waiting for a commissioning backend.')
         tk.Label(strip,textvariable=self.message,bg='#E8EEF6',fg=COLORS['text'],anchor='w',wraplength=1050,font=('DejaVu Sans',10)).grid(row=0,column=0,sticky='ew',padx=15,pady=7)
@@ -280,9 +299,19 @@ class OperatorGUI:
         new=value['session_id']!=self.session
         if new:
             if self.session is not None:
+                # A genuine backend restart: disarm, retire in-flight requests, clear old
+                # session state, then wait for fresh backend status before a new Start.
                 self.stop_teleop()
-                self.startup.message='ROS session changed — press START TELEOP'
+                self.startup.retire()
+                self.session_changes+=1
+                self.session_events.append(time.monotonic())
+                if value['session_id'] not in self.session_ids:
+                    self.session_ids.append(value['session_id'])
+                self.session_restart=True
+                self.notify('ROS backend session restarted — previous session retired. '
+                            'Wait for fresh status, then press START TELEOP.')
             self.uncertain_enable_session=None
+            self.uncertain_servo_session=None
             self.cancel_requests()
             self.generation+=1
             self.session=value['session_id']
@@ -294,6 +323,9 @@ class OperatorGUI:
             self.alignment.set(False)
             self.optical.set(False)
             self.confirmation_rejected=False
+        if value.get('servo_status_fresh') is True:
+            # A fresh Servo status resolves any previously uncertain start outcome.
+            self.uncertain_servo_session=None
         for key,var in [('alignment_verified',self.alignment),('optical_loss_test_verified',self.optical)]:
             if boolean(self.last_status,key) is True and boolean(value,key) is False:
                 var.set(False)
@@ -454,11 +486,15 @@ class OperatorGUI:
         if self.retiring_startup or self.startup_request or self.uncertain_enable_session == self.session and self.session is not None:
             self.notify('Waiting for canceled startup to retire. An enable timeout requires Restart ROS.',True)
             return
+        if self.uncertain_servo_session == self.session and self.session is not None:
+            self.notify('Servo start outcome is unknown. Wait for fresh Servo status, or Restart ROS.',True)
+            return
         if self.pending or self.parameters.pending:
             self.notify('Wait for the current engineering/settings request to finish.',True)
             return
         if self.startup.start(self.session):
             self.heartbeat_allowed=True
+            self.session_restart=False
 
     def stop_teleop(self):
         if getattr(self, 'setup_wizard', None) is not None:
@@ -484,9 +520,12 @@ class OperatorGUI:
                         detail=getattr(result,'message','Controller activation rejected')
                     elif action=='enable' and generation==self.generation:
                         self.uncertain_enable_session=self.session
+                    elif action=='servo' and generation==self.generation:
+                        self.uncertain_servo_session=self.session
                 except Exception as error:
                     detail=str(error)
                     if action=='enable' and generation==self.generation:self.uncertain_enable_session=self.session
+                    if action=='servo' and generation==self.generation:self.uncertain_servo_session=self.session
                 if not future.done():future.cancel()
                 client.remove_pending_request(future)
                 self.startup_request=None
@@ -645,6 +684,44 @@ class OperatorGUI:
         value.set(('✓ ' if ok is True else '? ' if ok is None else '● ')+text)
         w.configure(foreground=COLORS['green'] if ok is True else COLORS['muted'] if ok is None else COLORS['amber'])
 
+    def session_warning(self):
+        recent=sum(1 for t in self.session_events if time.monotonic()-t<60.)
+        if len(self.session_ids)>1 and recent>=2:
+            return (f'{len(self.session_ids)} backend session IDs, {recent} restarts in 60 s — '
+                    'check for duplicate commissioning backends on /vr_real/operator_status.')
+        if self.session_restart:
+            return 'Waiting for fresh backend status; press START TELEOP when the work area is ready.'
+        return ''
+
+    def set_banner(self,stage,detail='',color=None):
+        if color is None:
+            color=(COLORS['red'] if stage.startswith('FAULT') else COLORS['green']
+                   if stage.startswith(('READY','TELEOP ACTIVE')) else COLORS['amber'])
+        self.startup_stage.set(stage)
+        self.startup_detail.set(detail)
+        for widget in (self.banner,self.banner_label,self.banner_detail):
+            widget.configure(bg=color)
+
+    def clutch_text(self,armed,d):
+        raw=d.get('clutch','Unavailable')
+        if armed is None:
+            return 'Unknown — backend motion authorization unavailable'
+        if armed is not True:
+            return 'DISARMED' + (' — A held, no motion authorization' if boolean(d,'a_held') is True else '')
+        if raw=='ACTIVE' and boolean(d,'motion_ready') is True:
+            return 'ACTIVE'
+        return 'ARMED — ready for a fresh A press' if raw!='ACTIVE' else 'ARMED'
+
+    def servo_text(self,d):
+        if boolean(d,'servo_status_fresh') is True:
+            return str(d.get('servo_detail','Unavailable'))+' (running)'
+        state=d.get('servo_state')
+        if state=='stale': return 'Stale — started but no fresh status (treated as not healthy)'
+        if state=='stopped': return 'Stopped — process no longer publishing status'
+        if state=='absent': return 'Absent — Servo process not running'
+        if state=='unstarted': return 'Not started'
+        return 'Stale / Unavailable'
+
     def update_dashboard(self,stale,d):
         if stale:
             self.header_mode.set('DISCONNECTED');self.header_state.set('CONNECTING')
@@ -654,6 +731,8 @@ class OperatorGUI:
             self.diagnostics.set('Diagnostics: Stale / Unavailable')
             self.lighthouse.set('Lighthouse 0: Unknown\nLighthouse 1: Unknown\nValid pose: Unknown')
             self.motion.set('Clutch displacement: Stale / not current')
+            self.set_banner('DISCONNECTED — WAITING FOR BACKEND',
+                            'No fresh backend status. Do not infer robot state; check the pendant.',COLORS['muted'])
             for key in self.readiness:self.set_ready(key,None,'Unknown / status unavailable')
             return
         mode=str(d.get('mode','UNKNOWN'))
@@ -681,8 +760,12 @@ class OperatorGUI:
             self.set_ready(key,ok,label+': '+text)
         diag=d.get('velocity_diagnostics')
         a_text={True:'held',False:'released',None:'Unknown'}[boolean(d,'a_held')]
-        servo=d.get('servo_detail','Unavailable') if boolean(d,'servo_status_fresh') is True else 'Stale / Unavailable'
-        self.diagnostics.set('Published TCP command: '+vector_text(vector(diag,'published_twist'))+'\nMeasured TCP estimate (TF): '+vector_text(vector(diag,'measured_tcp_velocity'))+f"\nServo: {servo}\nClutch: {d.get('clutch','Unavailable')} | A: {a_text}")
+        servo=self.servo_text(d)
+        authorization={True:'ARMED (motion permitted once A is held)',False:'disarmed (no motion authorization)',None:'Unknown'}[armed]
+        clutch=self.clutch_text(armed,d)
+        self.diagnostics.set('Published TCP command: '+vector_text(vector(diag,'published_twist'))+
+            '\nMeasured TCP estimate (TF): '+vector_text(vector(diag,'measured_tcp_velocity'))+
+            f"\nServo: {servo}\nA button (VR input): {a_text}\nBackend motion authorization: {authorization}\nClutch (effective): {clutch}")
         native = self.native_reference if time.monotonic()-self.native_reference_at < .25 else {}
         measured = vector(d, 'measured_joint_velocity')
         actual_q = vector(d, 'measured_joint_position')
@@ -702,8 +785,25 @@ class OperatorGUI:
         if robot_fault:self.header_state.set('FAULT')
         if self.startup.requested or self.startup.state=='ERROR' or not self.heartbeat_allowed:
             self.live_message.set(self.startup.message)
-        if self.startup.state=='ERROR':self.header_state.set('FAULT')
-        elif not fault and not robot_fault and self.startup.enabled and tracking is False:self.header_state.set('TRACKING LOST')
+        if self.startup.state=='ERROR':
+            failure=self.startup.last_failure or {}
+            detail=str(failure.get('message','Startup failed'))
+            hint=str(failure.get('hint',''))
+            self.set_banner('FAULT — '+str(failure.get('stage','STARTUP')),
+                            detail+(' — '+hint if hint else ''),COLORS['red'])
+            self.header_state.set('FAULT')
+        elif self.startup.requested and self.startup.state!='READY':
+            self.set_banner(self.startup.stage,self.startup.message)
+            self.header_state.set(self.startup.stage)
+        elif self.startup.state=='READY':
+            warning=self.session_warning()
+            self.set_banner(self.startup.stage,warning)
+        elif self.session_restart:
+            self.set_banner('SESSION CHANGED — PRESS START TELEOP',self.session_warning())
+        else:
+            self.set_banner('DISARMED — PRESS START TELEOP','')
+        if not fault and not robot_fault and self.startup.enabled and tracking is False:
+            self.header_state.set('TRACKING LOST')
         self.motion.set(motion_text(d))
 
     def poll(self):

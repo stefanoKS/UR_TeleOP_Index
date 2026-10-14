@@ -35,6 +35,12 @@ from .preferences import DEFAULTS
 
 COMMAND = '/scaled_joint_trajectory_controller/joint_trajectory'
 STAGED = '/vr_real/servo_joint_targets'
+# MoveIt Servo creates this publisher when its process starts (ServoCalcs ctor) and only
+# publishes status once start_servo has begun its calculation loop. Publisher presence is
+# therefore an authoritative "process exists" signal; freshness proves "started and looping".
+SERVO_STATUS_TOPIC = '/vr_real/servo_node/status'
+SERVO_STATUS_FRESH_S = .25
+SERVO_PRESENCE_FRESH_S = .6
 
 
 SERVO_STATUS = {
@@ -112,6 +118,11 @@ class Commissioning(Preview):
         self.optical_detail = 'No optical data'
         self.servo_status = -1
         self.servo_at = self.scale_at = self.operator_at = -float('inf')
+        # Servo lifecycle: publisher presence (process exists) is separate from whether
+        # status has ever arrived (started) and whether it is currently fresh (looping).
+        self.servo_seen = False
+        self.servo_present = False
+        self.servo_present_at = -float('inf')
         self.speed_scale = 0.
         self.robot_mode = self.safety_mode = None
         self.program_running = False
@@ -308,6 +319,7 @@ class Commissioning(Preview):
                 optical_ready(self.optical_stations, self.station_policy))
     def on_servo(self, msg):
         self.servo_status, self.servo_at = int(msg.data), time.monotonic()
+        self.servo_seen = True
         if self.servo_status not in (0, 1, 3, 6): self.trip(servo_status_detail(self.servo_status))
     def on_scale(self, msg):
         # Installed UR broadcaster publishes percent (state interface * 100).
@@ -391,7 +403,23 @@ class Commissioning(Preview):
                   '/io_and_status_controller/robot_program_running']
         self.graph_ok = all(self.count_publishers(topic) == 1 for topic in topics)
         self.graph_ok = self.graph_ok and self.count_publishers(COMMAND) == (1 if self.motion_output else 0)
+        # Publisher presence proves the Servo process exists even before it is started.
+        self.servo_present = self.count_publishers(SERVO_STATUS_TOPIC) > 0
+        self.servo_present_at = now
         self.graph_at = now
+
+    def servo_process_present(self, now=None):
+        now = time.monotonic() if now is None else now
+        return self.servo_present and now - self.servo_present_at < SERVO_PRESENCE_FRESH_S
+
+    def servo_state(self, now=None):
+        """Authoritative Servo lifecycle, never a permanent historical observation."""
+        now = time.monotonic() if now is None else now
+        if now - self.servo_at < SERVO_STATUS_FRESH_S:
+            return 'running'
+        if not self.servo_process_present(now):
+            return 'stopped' if self.servo_seen else 'absent'
+        return 'stale' if self.servo_seen else 'unstarted'
 
     def reasons(self):
         t = time.monotonic()
@@ -409,7 +437,16 @@ class Commissioning(Preview):
             problems.append('Need stable optical observations from either calibrated station; signal presence alone does not validate a 6-DoF pose')
         if not self.pose_quality.continuous:
             problems.append('Tracking needs at least 100 ms of continuous independent 6-DoF poses')
-        if t-self.servo_at >= .25: problems.append('Servo status stale (no update for 250 ms)')
+        if t-self.servo_at >= SERVO_STATUS_FRESH_S:
+            state = self.servo_state(t)
+            if state == 'stale':
+                problems.append('Servo status stale (started but no update for 250 ms)')
+            elif state == 'stopped':
+                problems.append('Servo process stopped; status no longer published')
+            elif state == 'absent':
+                problems.append('Servo process not running (no status publisher)')
+            else:
+                problems.append('Servo not started; status unavailable')
         elif self.servo_status not in (0, 1, 3, 6): problems.append(servo_status_detail(self.servo_status))
         if self.robot_mode != 7:
             problems.append(f'Robot mode {self.robot_mode}: RUNNING (7) required')
@@ -653,8 +690,10 @@ class Commissioning(Preview):
             'optical_loss_test_verified': bool(self.get_parameter('optical_loss_test_verified').value),
             'operator_heartbeat_fresh': time.monotonic()-self.operator_at < .5,
             'controller_state_fresh': time.monotonic()-self.controller_at < .6,
-            'servo_started': math.isfinite(self.servo_at),
-            'servo_status_fresh': time.monotonic()-self.servo_at < .25,
+            'servo_state': self.servo_state(),
+            'servo_process_present': self.servo_process_present(),
+            'servo_status_seen': self.servo_seen,
+            'servo_status_fresh': time.monotonic()-self.servo_at < SERVO_STATUS_FRESH_S,
             'teleop_control_mode': self.core.control_mode,
             'tracking_station_policy': self.station_policy,
             'single_station_motion_scale': 1.,

@@ -30,7 +30,7 @@ viewer in a separate window; it is not collision sensing.
 
 | Control or display | Meaning |
 |---|---|
-| START TELEOP | Asynchronously prepare the controller, start Servo if needed, request enable, then wait for actual backend arming |
+| START TELEOP | Asynchronously prepare the controller, start or recover Servo as needed, request enable, then wait for actual backend arming; a prominent banner names the current stage and blocker |
 | STOP TELEOP | Interrupt startup, clear enable intent, and request a software stop; always available |
 | Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, individual preparation, optional observations and read-only sway recording |
 | Open RViz / D405 camera | Optional visualization; camera is not collision protection |
@@ -70,9 +70,15 @@ A saved joint-speed change requires restarting the ROS stack because the final n
 5. Hold A to move; release A to request a controlled stop.
 6. Press **STOP TELEOP** to clear enable intent. A new START is required afterward.
 
+A prominent banner names the current startup stage and blocker (for example `WAITING — RELEASE A`, `PREPARING CONTROLLER`, `STARTING SERVO`, `WAITING — SERVO STATUS`, `WAITING — CONTROLLER CONFLICT`, `WAITING — EXTERNAL CONTROL`, `WAITING — INVALID TRACKING`, `READY — PRESS A TO MOVE`). The dashboard also shows the A-button input, the backend motion authorization and the effective clutch separately; the clutch is never labelled ACTIVE merely because A is held while the gate is disarmed.
+
 A previously commissioned, unchanged installation needs no daily checkboxes or separate Servo/controller buttons. A configuration error names the missing or inconsistent input. Resolve it in the selected configuration; do not assume a numeric RPY value proves physical alignment. Effective TCP speed caps and the active final joint limit remain visible even while editing drafts. Saved high limits are not evidence of approval.
 
-Missing hardware prerequisites wait without repeated clicks. Failed services show the failing stage and require a controlled START retry after correction. An **enable service timeout with unknown outcome requires Restart ROS**: local cancellation cannot undo a request already received by the server. STOP remains available; the GUI withholds its heartbeat to prevent a delayed enable from restoring motion permission.
+Missing hardware prerequisites wait without repeated clicks. Failed services show the failing stage and exact response, and require a controlled START retry after correction. An **enable service timeout with unknown outcome requires Restart ROS**: local cancellation cannot undo a request already received by the server. STOP remains available; the GUI withholds its heartbeat to prevent a delayed enable from restoring motion permission.
+
+A Servo whose status has expired is never treated as healthy. If a previously started Servo goes stale, START TELEOP attempts one bounded `start_servo` restart; if fresh status still does not arrive, or the Servo process is missing, startup fails and displays the exact **Restart ROS (Engineering → Restart ROS)** instruction instead of waiting indefinitely. A Start Servo timeout with unknown outcome withholds further automatic starts until fresh Servo status or a ROS restart.
+
+If the backend session changes (a genuine commissioning-backend restart), the GUI disarms, retires in-flight requests and clears old session state, then waits for fresh backend status; press START TELEOP again. Repeated session changes are reported with the number of distinct session IDs as a possible duplicate-backend condition. A managed child crash names the process, its exit reason and the log path, and stops the owned stack without restarting motion.
 
 Tracking loss preserves the existing bounded recovery: release A, wait for valid tracking and stationary readiness, then press A again. Healthy Servo/controller components are not prepared again. ROS/backend restart or GUI heartbeat loss requires a new START. STOP is a software stop, not an emergency stop.
 

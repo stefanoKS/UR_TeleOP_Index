@@ -221,6 +221,21 @@ Physical workcell commissioning remains necessary: robot identity/calibration, t
 
 `test_startup.py` tests asynchronous stage ordering, acknowledgments/readback, idempotency, missing prerequisites, failures/timeouts, STOP races, session retirement and tracking recovery. `test_engineering.py` retains legacy evidence regression coverage; `test_setup.py` tests new local persistence, invalidation, migration and observed setup transitions using synthetic fixtures only. The isolated ROS checks ensure legacy flags cannot satisfy missing configuration readiness and that optical loss and mapping-change revalidation remain effective. `gui_render_check.py` additionally uses real ROS services with a synthetic backend to test one-button preparation, duplicate Start, STOP, and reuse of active components. Screenshots from this check are simulated telemetry, not a robot commissioning result.
 
+### Startup-repair validation (2026-10-14)
+
+Changed sources: `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/{commissioning,startup,gui,desktop}.py` and matching tests (`test/test_startup.py`, `test/ros_integration_checks.py`, `test/gui_render_check.py`, `test/servo_pipeline_check.py`). The backend no longer publishes the permanent `servo_started` flag; it publishes `servo_state`, `servo_process_present`, `servo_status_seen` and `servo_status_fresh`. MoveIt Servo 2.5.x was inspected and its installed library confirmed (`status_codes.h`, `libmoveit_servo_lib.so`) to create the `status` publisher at process start and publish `Int8` only after `start_servo` begins its loop.
+
+| Check actually run | Result |
+|---|---|
+| Python test directories (both packages, workspace overlays sourced) | 365 passed; one existing xacro/Python 3.11 warning |
+| Explicit `ros_integration_checks.py` (localhost domain 147) | 87 passed |
+| Display-dependent `gui_render_check.py` (`DISPLAY=:0`) | Passed; three layouts plus session/clutch/Servo banner assertions |
+| Real `servo_pipeline_check.py` (real Servo/RSP on domain 147) | Passed; status publisher present before start, no status before `start_servo`, fresh warning-free status after start, 201 targets forwarded |
+| `mock_startup_check.py` (GenericSystem, domain 148) | Passed |
+| `colcon build --packages-select ur_vr_teleop` | Built successfully |
+
+Not executed here: the C++ bridge/native-controller CTest suites (unaffected packages), the `calibration_ros_check.py` capture check, and all physical tests. Remaining hardware-only checks: real one-button startup with a live Servo/controller/driver, physical Servo-stale recovery, controller activation readback on the real controller manager, duplicate-backend/session behaviour, and the separate UR10e oscillation investigation.
+
 ## V5.1 controller capture validation
 
 After rebuilding/sourcing `ur_vr_teleop`, run the additional explicit check serially with other ROS tests:

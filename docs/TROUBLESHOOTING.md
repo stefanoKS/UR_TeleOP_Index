@@ -103,7 +103,8 @@ its unknown-state behavior.
 | Controller ownership conflict | Resolve the competing controller/action explicitly; startup does not evict it |
 | Service unavailable/rejected | Inspect exact stage and service/driver logs; fix the cause and press START for one controlled retry |
 | Enable timed out; outcome unknown | STOP remains active; use Engineering Restart ROS, then a fresh START after status returns |
-| Servo previously started but status lost | Inspect/recover solver; startup will not create or start a duplicate solver |
+| Servo stale (`WAITING — SERVO STATUS`) or `Servo process not running` | START attempts one bounded `start_servo` restart; if fresh status still does not arrive, or the process is missing, use Engineering Restart ROS then a fresh START. A stale status is never treated as healthy and never waits indefinitely |
+| Controller activation acknowledged but ownership not confirmed | Inspect `/controller_manager/list_controllers` and the driver log; resolve the competing claimant/plugin issue, then press START |
 | Effective limits mismatch | Compare visible active values and controller readback; native limits need restart; review the actual envelope physically before operation |
 | Tracking restored but no movement | Release A, wait for healthy stationary readiness, then make a fresh press |
 
