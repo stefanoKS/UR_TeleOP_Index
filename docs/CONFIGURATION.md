@@ -168,7 +168,7 @@ The remaining project-template fields configure standard UR components, not tele
 |---|---|---|---|
 | `command_in_type` | Input units | `speed_units` | Must agree with Cartesian m/s and rad/s output |
 | `publish_period` | Servo output period / s | 0.01 | Positive, coordinated with control period |
-| `system_latency_compensation` | Prediction time / s | 0.04 | Installed Servo validation; do not stack compensation blindly |
+| `smoothing_filter_plugin_name` | Servo position processing | `ur_teleop_controllers::ServoVelocityPassthrough` | Restart; requires the supervised native Ruckig chain |
 | `command_out_type` | Output message | `trajectory_msgs/JointTrajectory` | Gate requires this type |
 | `publish_joint_positions`, `publish_joint_velocities`, `publish_joint_accelerations` | Fields emitted | true, true, false | Preserve native velocity-demand contract |
 | `use_gazebo`, `is_primary_planning_scene_monitor` | Environment / scene ownership | false, true | Match launch topology |
@@ -184,6 +184,8 @@ The remaining project-template fields configure standard UR components, not tele
 | `num_outgoing_halt_msgs_to_publish` | Halt messages / count | 10 | Preserve stop behavior |
 | `check_collisions`, `collision_check_rate` | Model collision checking / Hz | true, 20 | Do not silently disable |
 | `lower_singularity_threshold`, `hard_stop_singularity_threshold` | Singularity condition thresholds | 17, 30 | Ordered, installed Servo validation |
+
+The production Servo plugin preserves the joint increment instead of filtering absolute joint positions before Servo computes velocity. Final Ruckig smoothing and all native limits remain active. `butterworth_filter_coeff` no longer affects production motion; no operator preference is added or migrated. The old `system_latency_compensation` override was removed because installed Humble Servo 2.5.10 does not expose it as an effective parameter. This change requires a managed-stack restart and supervised sway comparison; rebuilding does not change an already-running Servo process.
 
 Generated real model xacro uses `safety_limits=true`, `safety_pos_margin=0.15`, and `safety_k_position=20`. The desktop copies UR description xacros to the session directory to apply servoj tuning; it does not edit installed UR package files. The commissioning model comes from installed `ur_description` with the same calibration, independently of the desktop's driver description copy.
 

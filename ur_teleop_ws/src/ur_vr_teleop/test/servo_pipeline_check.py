@@ -2,6 +2,7 @@
 No UR driver, controller manager, hardware plugin or robot command publisher.
 """
 import importlib.util
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -60,17 +61,25 @@ try:
     servo_status = []
     node.create_subscription(Int8, '/vr_real/servo_node/status', lambda m: servo_status.append(m.data), 10)
     q = [0., -1.2, 1.6, -1.97, -1.57, 0.]
-    def pump(seconds, move=False):
-        until = time.monotonic()+seconds
+    def pump(seconds, move=False, oscillating_feedback=False, send_twist=True):
+        began = time.monotonic()
+        until = began+seconds
         while time.monotonic() < until:
             stamp = node.get_clock().now().to_msg()
             msg = JointState()
-            msg.header.stamp, msg.name, msg.position, msg.velocity = stamp, list(JOINTS), q, [0.]*6
+            positions, velocities = list(q), [0.]*6
+            if oscillating_feedback:
+                phase = 2*math.pi*2.6*(time.monotonic()-began)
+                positions[0] += .004*math.sin(phase)
+                velocities[0] = .004*2*math.pi*2.6*math.cos(phase)
+            msg.header.stamp, msg.name = stamp, list(JOINTS)
+            msg.position, msg.velocity = positions, velocities
             states.publish(msg)
             twist = TwistStamped()
             twist.header.stamp, twist.header.frame_id = stamp, 'base_link'
             twist.twist.linear.x = .001 if move else 0.
-            twists.publish(twist)
+            if send_twist:
+                twists.publish(twist)
             rclpy.spin_once(node, timeout_sec=.01)
             if any(p.poll() is not None for p in processes):
                 raise RuntimeError('Child exited; inspect '+str(directory/'processes.log'))
@@ -101,6 +110,36 @@ try:
     assert displacement > 1e-6, f'Servo output never moved from input joints: {displacement}'
     print('Maximum requested joint displacement:', displacement, 'rad')
     print('Servo/RSP synthetic bench passed:', len(trajectories), 'targets; horizon range', min(horizons), max(horizons))
+    # Feed measured oscillation back to actual Servo while keeping the requested
+    # Cartesian velocity constant. A position-history filter turns this into
+    # unwanted joint corrections; native Ruckig must own joint smoothing instead.
+    trajectories.clear()
+    pump(3., move=True, oscillating_feedback=True)
+    assert len(trajectories) >= 100
+    peak = max(abs(v) for msg, _, _ in trajectories[20:] for v in msg.points[0].velocities)
+    assert peak < .01, f'Measured oscillation leaked into Servo velocity demand: {peak} rad/s'
+    print('Oscillating-feedback regression peak joint request:', peak, 'rad/s')
+    for label, send_twist in [('zero command', True), ('input timeout', False)]:
+        if not send_twist:
+            pump(.5, move=True)
+        trajectories.clear()
+        began_ns = node.get_clock().now().nanoseconds
+        pump(.6, oscillating_feedback=True, send_twist=send_twist)
+        halted = [msg for msg, _, received_ns in trajectories if received_ns-began_ns > 150_000_000]
+        if send_twist:
+            assert halted, 'No zero-command output'
+            assert all(abs(v) < 1e-9 for msg in halted for v in msg.points[0].velocities), label
+            print(label, 'produced zero velocity despite moving feedback')
+        else:
+            # Humble Servo suppresses stale-input output. The gate and native
+            # watchdog own stopping when targets cease; do not expect a halt msg.
+            assert trajectories, 'Timeout test never received pre-expiry targets'
+            assert not halted, 'Servo continued publishing after input expiry'
+            print(label, 'stopped publishing; downstream watchdog remains authoritative')
+    trajectories.clear()
+    pump(.5, move=True)
+    assert any(abs(v) > 1e-6 for msg, _, _ in trajectories for v in msg.points[0].velocities), 'No recovery'
+    assert node.count_publishers('/scaled_joint_trajectory_controller/joint_trajectory') == 0
     print('No robot command publisher. Logs:', directory)
 finally:
     if node is not None:

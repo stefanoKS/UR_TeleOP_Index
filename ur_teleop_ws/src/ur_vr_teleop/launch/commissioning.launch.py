@@ -37,7 +37,10 @@ def nodes(context):
     servo = yaml.safe_load((moveit / 'config/ur_servo.yaml').read_text())
     servo.update({
         'command_in_type': 'speed_units', 'publish_period': CONTROL_PERIOD_S,
-        'system_latency_compensation': .04,
+        # Humble derives velocity from filtered absolute position minus measured
+        # position. Leave that increment intact: the native controller owns joint
+        # smoothing, avoiding a delayed measured-position feedback term in Servo.
+        'smoothing_filter_plugin_name': 'ur_teleop_controllers::ServoVelocityPassthrough',
         'command_out_type': 'trajectory_msgs/JointTrajectory',
         'publish_joint_positions': True, 'publish_joint_velocities': True,
         'publish_joint_accelerations': False, 'use_gazebo': False,

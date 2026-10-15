@@ -139,3 +139,9 @@ Engineering Preview is available under **Engineering / diagnostics** or with `st
 ## Record sway
 
 Open **Engineering / diagnostics → Advanced diagnostics / sway recording** and press **RECORD SWAY DIAGNOSTICS** before the separately authorized diagnostic session. Recording does not start or enable teleoperation. Press **STOP RECORDING** afterward and wait for the saved/failed message. STOP TELEOP remains separate and always visible. Camera availability does not affect recording. See [analysis and interpretation](SWAY_DIAGNOSTICS.md).
+
+## Loading the sway correction
+
+After rebuilding the native-controller and teleop packages, stop teleoperation and restart the managed stack to load the new Servo plugin. Starting a new panel alone does not reload it. Production now leaves Servo joint increments intact and uses native Ruckig for final joint smoothing; existing speed, acceleration, jerk and safety checks remain active. Saved tuning and alignment are unchanged.
+
+The correction addresses the measured-position feedback oscillation found in the October 15 recording. It has not established a hardware sway reduction. In supervised commissioning, begin at reviewed low limits, record a comparable slow movement and A-release stop, and compare Servo, final-reference and measured motion using the sway recorder. Do not infer robot stopping performance from offline tests.

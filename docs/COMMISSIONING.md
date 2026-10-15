@@ -151,7 +151,7 @@ The default `test_*.py` discovery does not run the separately named ROS check sc
 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/mock_startup_check.py
 ```
 
-The first launches actual Servo/RSP with synthetic joints on localhost domain 147 and no robot driver. The second uses a generated UR driver launch with loopback IP, `GenericSystem`, dashboard disabled, and motion controller inactive on domain 148. Both scripts contain original absolute paths. `gui_render_check.py` is an additional display-dependent GUI check, not a physical test.
+The first launches actual Servo/RSP with synthetic joints on localhost domain 147 and no robot driver. It also holds Cartesian demand constant while injecting a 2.6 Hz measured-position oscillation: Servo velocity must remain below 0.01 rad/s for the 0.001 m/s test input. It checks zero-command output, suppression of stale-input output and recovery (the gate/native watchdogs own stopping after output ceases). The native C++ tests separately check the loaded Servo plugin, invalid input, moving-feedback rejection, reset and final Ruckig derivative limits. The second uses a generated UR driver launch with loopback IP, `GenericSystem`, dashboard disabled, and motion controller inactive on domain 148. Both scripts contain original absolute paths. `gui_render_check.py` is an additional display-dependent GUI check, not a physical test.
 
 Interactive mock simulation:
 

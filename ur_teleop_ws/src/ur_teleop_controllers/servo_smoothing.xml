@@ -1,0 +1,7 @@
+<library path="servo_velocity_passthrough">
+  <class name="ur_teleop_controllers::ServoVelocityPassthrough"
+         type="ur_teleop_controllers::ServoVelocityPassthrough"
+         base_class_type="online_signal_smoothing::SmoothingBaseClass">
+    <description>Preserve Servo velocity demand; final joint smoothing belongs to the supervised native Ruckig controller.</description>
+  </class>
+</library>

@@ -1,6 +1,6 @@
 # Sway recording and offline comparison
 
-The startup simplification changes no Ruckig, Servo, servoj or hand-velocity algorithm. Its goal is trustworthy measurement of the reported oscillation. No hardware root cause or physical improvement is claimed.
+The original startup simplification changed no motion algorithm. The subsequent October 15 sway correction changes Servo position processing as described below; no physical improvement is claimed from software tests alone.
 
 ## Record
 
@@ -46,3 +46,29 @@ All cross-stream comparisons use bag receive time. Actual header/source timestam
 | Same-sign decaying reference and feedback | Continued commanded deceleration rather than repeated corrections |
 
 Inspect the actual time plots and configuration together. Whole-record reversal counts also include deliberate operator reversals. An FFT peak alone does not establish unwanted oscillation. Physical payload/TCP, stopping distance and wrist behavior require supervised validation.
+
+## October 15 Servo feedback correction
+
+The 12:42 recording showed a roughly 2.6 Hz oscillation in Servo output, final reference and measured joints. In a representative two-second interval, the reconstructed shoulder-pan request stayed positive while Servo repeatedly requested reverse motion. Humble Servo's Butterworth position history fed measured motion back into its position-difference velocity calculation.
+
+Production now selects `ur_teleop_controllers::ServoVelocityPassthrough`: it preserves Servo's joint increment and removes that position-history term. Native Ruckig remains responsible for final joint smoothing and derivative limits. This does not change hand filtering, mapping, saved limits, servoj tuning, collision/singularity handling, timestamps or gate checks. The standalone simulator is unchanged. Restart the managed stack after rebuilding both affected packages; an existing process keeps its loaded plugin.
+
+The isolated real-Servo regression injects a 0.004 rad, 2.6 Hz feedback oscillation while requesting 0.001 m/s steady translation. The previous configuration failed at a peak joint request of 0.05327 rad/s; the corrected configuration produced 0.002139 rad/s. These are synthetic test command measurements, not a measured percentage reduction in physical robot sway. Zero-command output, stale-input publication suppression and recovery are checked in the same test. Native C++ tests check final derivative limits and reset behavior.
+
+A new supervised recording is still required to assess physical sway, stop response and any remaining downstream servoj amplification. Keep the previous recording as the baseline and compare similar low-speed movements with the same payload, pose and tuning.
+
+### Implementation validation (2026-10-15)
+
+Executed with `/usr/bin/python3`, ROS Humble and the rebuilt local overlay:
+
+| Command / check | Result |
+|---|---|
+| `colcon build --base-paths src --packages-select ur_teleop_controllers ur_vr_teleop --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE=/usr/bin/python3` (inside `ur_teleop_ws`) | Both packages built |
+| `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test ur_teleop_ws/src/ur_vr_sim_teleop/test -q` | 370 passed; one existing Python dependency warning |
+| `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test/ros_integration_checks.py -q` | 88 passed |
+| `ctest --test-dir ur_teleop_ws/build/ur_teleop_controllers --output-on-failure` | 3 suites / 13 tests passed, including the real native plugin with local hardware-interface doubles |
+| `/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/servo_pipeline_check.py` | Passed with the production launch and installed Servo/RSP/relay; previous configuration failed the new feedback regression |
+| `/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/calibration_ros_check.py` | Passed |
+| `git diff --check` | Passed |
+
+ROS tests used isolated localhost domains; no physical driver was started. Driver-generation mock startup, GUI rendering and bridge guard suites were not rerun because those implementations were unchanged. Physical sway, payload/TCP response, and stopping distance remain unvalidated. No runtime robot settings were changed and the managed physical stack was not restarted by these tests.
