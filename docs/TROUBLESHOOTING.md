@@ -113,3 +113,7 @@ For Preview and optional observations, see [Engineering and rollback](OPERATION.
 ## Sway after hand motion stops
 
 Use **RECORD SWAY DIAGNOSTICS**, then the [offline analyzer](SWAY_DIAGNOSTICS.md). Compare hand/Twist, Servo, final native reference and feedback before changing a controller. Null metrics mean unavailable data, inadequate observation duration or an ambiguous signal. Do not increase gain, speed, acceleration or jerk to mask oscillation. A recording failure appears in the recorder log; a second recorder is rejected by the shared lock. An interrupted/incomplete bag must not be treated as complete evidence.
+
+## Calibration-file warning during normal tracking
+
+The former generic “Calibration files changed during this session” warning could be triggered by libsurvive's normal configuration writes. The tracking persistence file is now checked for initial availability only; routine rewrites do not revoke readiness. Rebuild/source `ur_vr_teleop` and restart the managed backend once to load this fix. Do not delete or regenerate tracking calibration to clear the old warning. Robot kinematics changes still block with a robot-specific message; live tracking loss, stale pose and invalid mapping still block independently.

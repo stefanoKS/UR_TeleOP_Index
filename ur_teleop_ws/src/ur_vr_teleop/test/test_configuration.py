@@ -33,7 +33,8 @@ def test_unknown_or_invalid_configuration_blocks(configured,fault):
 def test_changed_calibration_is_not_silently_accepted(configured):
     from pathlib import Path
     c=Configuration(json.dumps(configured));assert c.refresh({})
-    Path(configured['tracking']).write_text('changed synthetic calibration')
+    path=Path(configured['settings']['robot']['calibration_file'])
+    path.write_text(path.read_text()+'# changed robot calibration file\n')
     assert not c.refresh({}) and 'changed during this session' in c.reason
 
 def test_runtime_mapping_is_revalidated_and_not_physically_certified(configured):
@@ -52,4 +53,31 @@ def test_runtime_frames_must_match_servo(configured):
     ('joint_command_jerk_rad_s3',-1.)])
 def test_invalid_driver_tuning_is_not_configuration_ready(configured,key,value):
     configured['settings']['robot'][key]=value
+    assert not Configuration(json.dumps(configured)).refresh({})
+
+
+@pytest.mark.parametrize('update', ['metadata', 'station_estimate', 'truncate', 'replace'])
+def test_libsurvive_persistence_changes_do_not_revoke_configuration(configured, update):
+    from pathlib import Path
+    path=Path(configured['tracking'])
+    c=Configuration(json.dumps(configured));assert c.refresh({})
+    if update=='metadata':path.write_text('"variance":["0.0001"], "unlock_count":"1"')
+    elif update=='station_estimate':path.write_text('"lighthouse0":{"pose":["1","2","3","1","0","0","0"]}')
+    elif update=='truncate':path.write_text('')  # config_save uses fopen(path, "w").
+    else:path.unlink()  # replacement window; solver already owns loaded state
+    assert c.refresh({}),c.reason
+    assert not c.refresh({'tracking_to_robot_rpy_deg':[float('nan'),0.,0.]})
+
+
+def test_initial_tracking_write_or_missing_file_recovers_without_restart(configured):
+    from pathlib import Path
+    path=Path(configured['tracking']);path.write_text('')
+    c=Configuration(json.dumps(configured));assert not c.refresh({})
+    path.unlink();assert not c.refresh({})
+    path.write_text('synthetic loaded tracking configuration')
+    assert c.refresh({}),c.reason
+    path.write_text('normal runtime rewrite')
+    assert c.refresh({}),c.reason
+    # A new backend still checks initial availability; this is not persisted approval.
+    path.write_text('')
     assert not Configuration(json.dumps(configured)).refresh({})

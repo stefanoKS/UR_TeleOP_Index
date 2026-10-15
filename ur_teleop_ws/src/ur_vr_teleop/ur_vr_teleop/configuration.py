@@ -20,7 +20,8 @@ class Configuration:
         self.valid = False
         self.reason = 'Waiting for configuration check'
         self.technical = ''
-        self.file_identity = None
+        self.robot_calibration_identity = None
+        self.tracking_file_seen = False
 
     def refresh(self, parameters):
         self.valid = False
@@ -53,13 +54,20 @@ class Configuration:
             data = yaml.safe_load(calibration)
             if data.get('kinematics', {}).get('hash') != CALIBRATION_HASH:
                 raise ValueError('Unexpected robot calibration hash; review robot configuration')
-            tracking = Path(self.context['tracking']).expanduser().read_bytes()
-            if not tracking.strip():
-                raise ValueError('Tracking calibration file is empty')
-            identity = tuple(hashlib.sha256(v).hexdigest() for v in (calibration, tracking))
-            if self.file_identity is not None and identity != self.file_identity:
-                raise ValueError('Calibration files changed during this session; review mapping and restart')
-            self.file_identity = identity
+            # libsurvive owns this mutable persistence file. It saves OOTX,
+            # variance and station estimates during normal tracking, using a
+            # truncating write. Disk bytes are not the running solver's state.
+            # Check availability once; live calibrated optical/pose guards remain
+            # authoritative thereafter. Never latch a stop on routine rewrites.
+            if not self.tracking_file_seen:
+                tracking = Path(self.context['tracking']).expanduser().read_bytes()
+                if not tracking.strip():
+                    raise ValueError('Tracking calibration file is empty; waiting for libsurvive configuration')
+                self.tracking_file_seen = True
+            identity = hashlib.sha256(calibration).hexdigest()
+            if self.robot_calibration_identity is not None and identity != self.robot_calibration_identity:
+                raise ValueError('Robot kinematics calibration file changed during this session; review robot configuration and restart')
+            self.robot_calibration_identity = identity
             self.valid = True
             self.reason = 'Configuration present and consistent; physical alignment is an operator responsibility'
             self.technical = ''

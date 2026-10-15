@@ -949,3 +949,18 @@ def test_native_limit_mismatch_is_not_hidden_by_configuration(node):
     assert not node.configuration_controller_matches()
     assert any('Effective native smoothing limits differ' in r for r in node.reasons())
     assert not node.arm(Trigger.Request(),Trigger.Response()).success
+
+
+def test_tracking_persistence_rewrite_does_not_block_but_optical_loss_does(node):
+    from pathlib import Path
+    healthy(node)
+    # The fixture's temporary file represents libsurvive's truncating config_save;
+    # never edit the workstation calibration or publish in the physical domain.
+    Path(node.configuration.context['tracking']).write_text('')
+    node.configuration_valid = node.configuration.refresh(node.configuration_values())
+    assert node.configuration_ready()
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    assert node.command_pub is None
+    node.on_optical(Bool(data=False))
+    assert not node.gate.armed
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
