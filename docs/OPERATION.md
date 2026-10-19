@@ -145,3 +145,18 @@ Open **Engineering / diagnostics → Advanced diagnostics / sway recording** and
 After rebuilding the native-controller and teleop packages, stop teleoperation and restart the managed stack to load the new Servo plugin. Starting a new panel alone does not reload it. Production now leaves Servo joint increments intact and uses native Ruckig for final joint smoothing; existing speed, acceleration, jerk and safety checks remain active. Saved tuning and alignment are unchanged.
 
 The correction addresses the measured-position feedback oscillation found in the October 15 recording. It has not established a hardware sway reduction. In supervised commissioning, begin at reviewed low limits, record a comparable slow movement and A-release stop, and compare Servo, final-reference and measured motion using the sway recorder. Do not infer robot stopping performance from offline tests.
+
+## Change the tool tip / rotation centre
+
+1. Press **STOP TELEOP**, release A, and wait for fresh disarmed status.
+2. Define/calibrate and select the intended TCP on the UR pendant.
+3. Open **Settings → Tool tip / rotation centre**. Select **Read TCP from robot**.
+4. Review XYZ in millimetres and Rx/Ry/Rz as a **rotation vector in radians**, not RPY. Manual entry is also available. Click **Save for restart**.
+5. Close the editor and use **Engineering / diagnostics → Restart ROS**. The new session starts disarmed. The tip is now `teleop_tcp` in both the robot model and Servo.
+6. Check the orange/RGB target marker at the tip in Preview (the separate measured `tool0` axes remain the flange reference); then perform authorized, supervised low-speed tests of translation, rotation about the tip, clutch release and tracking-loss stops. Review payload and tool collision geometry separately.
+
+Saving does not change an already-running session. A configured profile requires a successful current read of the pendant TCP; a mismatch or unavailable read blocks readiness. Correct/select the intended pendant TCP, or read/review/save the new profile and restart. A fresh clutch release/press is required after faults. This monitor is a polled software check, not an instantaneous pendant-change interlock or a robot protective function.
+
+The editor saves `tool_tcp.json` beside the selected YAML, tied to its robot IP. Existing installations without this profile or a YAML `robot.tcp_offset` keep their original `tool0` behavior. A zero offset explicitly selects the flange point while retaining TCP consistency checks. Do not change the robot calibration file to represent a tool.
+
+The added tip link contains no physical tool geometry. Robot collision checks remain active, but an attached tool needs its own reviewed collision model; the TCP point alone does not describe its shape.

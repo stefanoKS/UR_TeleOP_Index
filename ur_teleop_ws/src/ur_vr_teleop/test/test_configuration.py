@@ -81,3 +81,22 @@ def test_initial_tracking_write_or_missing_file_recovers_without_restart(configu
     # A new backend still checks initial availability; this is not persisted approval.
     path.write_text('')
     assert not Configuration(json.dumps(configured)).refresh({})
+
+
+def test_tcp_mismatch_missing_and_recovery(configured, monkeypatch):
+    from ur_vr_teleop import tool_tcp
+    offset = [0., 0., .2, .1, -.2, .3]
+    configured['settings']['robot']['tcp_offset'] = offset
+    configured['settings']['teleop']['tool_frame'] = tool_tcp.FRAME
+    c = Configuration(json.dumps(configured))
+    monkeypatch.setattr(tool_tcp, 'read_offset', lambda ip: offset)
+    assert c.refresh({}), c.reason
+    monkeypatch.setattr(tool_tcp, 'read_offset', lambda ip: [0.]*6)
+    assert not c.refresh({}) and 'Pendant TCP differs' in c.reason
+    def missing(ip):
+        raise TimeoutError('TCP unavailable')
+    monkeypatch.setattr(tool_tcp, 'read_offset', missing)
+    assert not c.refresh({}) and 'TCP unavailable' in c.reason
+    monkeypatch.setattr(tool_tcp, 'read_offset', lambda ip: offset)
+    assert c.refresh({}), c.reason
+    assert not c.refresh({'tool_frame': 'tool0'})

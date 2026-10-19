@@ -54,7 +54,7 @@ These are not persisted tuning keys. Directly instantiating a node can differ fr
 | Parameter | Meaning / unit | Source/default | Allowed values | Override / apply |
 |---|---|---|---|---|
 | `base_frame` | Measured/reference base / frame | `base_link` | Valid matching TF frame | Startup ROS/YAML; restart; Servo frames must agree |
-| `tool_frame` | Measured tool / frame | `tool0` | Valid matching TF frame | Startup ROS/YAML; restart; verify actual tool |
+| `tool_frame` | Measured tool / frame | `tool0`; `teleop_tcp` with configured TCP | Valid matching TF frame | Startup ROS/YAML; restart; verify actual tool |
 | `axis_map` | Initial 3×3 tracking rotation / row-major matrix | Identity in Preview constructor | Proper finite orthonormal rotation | Startup ROS; restart; commissioning configures RPY mapping |
 | `observation_timeout_s` | Pose/joy/joint/TF age bound / s | YAML/Commissioning 0.35; standalone Preview 0.20 | 0.10–0.50 | Startup ROS/YAML; restart |
 | `workspace_radius_m` | Radius about initial robot reference / m | 0 | 0 disabled or 0.05–0.50 | Commissioning startup ROS/YAML; restart |
@@ -73,6 +73,7 @@ Only the managed desktop consumes driver-tuning keys. Editing them while ROS is 
 |---|---|---|---|---|
 | `robot.ip` | Robot network address | `192.168.1.251` | Reachable correct robot address | Config; restart; no saved override |
 | `robot.calibration_file` | Calibrated kinematics / path | `/home/ubuntu-ros/Documents/Teleop/ur_teleop/config/ur10e_calibration.yaml` | Readable YAML with expected calibration hash | Config; restart and mapping review |
+| `robot.tcp_offset` | Tool tip XYZ metres + rotation vector radians | Absent (legacy `tool0`) | Six finite numbers; translation norm ≤2 m, rotation norm ≤2π | Adjacent `tool_tcp.json` override; restart; pendant agreement required |
 | `robot.servoj_gain` | UR servoj gain / dimensionless | 500 | Integer 100–2000 | Managed generated description; restart |
 | `robot.servoj_lookahead_time` | UR servoj lookahead / s | 0.03 (desktop fallback 0.08) | 0.03–0.2 | Managed generated description; restart |
 | `robot.joint_command_acceleration_rad_s2` | Native joint acceleration / rad/s² | 1.0 | Finite >0 | Generated controller YAML; restart |
@@ -174,7 +175,7 @@ The remaining project-template fields configure standard UR components, not tele
 | `use_gazebo`, `is_primary_planning_scene_monitor` | Environment / scene ownership | false, true | Match launch topology |
 | `move_group_name` | Semantic group | `ur10e_manipulator` | Must exist in SRDF |
 | `planning_frame`, `robot_link_command_frame` | Cartesian frame | `base_link` | Must match mapping/TF |
-| `ee_frame_name` | Tool frame | `tool0` | Must match robot model |
+| `ee_frame_name` | Tool frame | `tool0`; `teleop_tcp` with configured TCP | Must match robot model |
 | `joint_topic` | Measured feedback | `/joint_states` | Matching six-joint feedback |
 | `cartesian_command_in_topic` | Teleop input | `/vr_real/servo_node/delta_twist_cmds` | Single authorized source |
 | `joint_command_in_topic` | Standard Servo joint-jog input | `/vr_real/servo_node/delta_joint_cmds` | Unused by teleop; do not inject a competing demand |
@@ -230,7 +231,7 @@ persisted keys, or committed operator overrides changed in this stabilization.
 
 Desktop defaults to Live, disabled/inactive. `--preview` selects Preview; direct launch defaults to motion output disabled. `--engineering-session` / `engineering_session` remain accepted for compatibility and grant no alternate readiness path. The old `engineering_required` parameter is accepted but ignored.
 
-`engineering_context` retains its wire name for compatibility and carries the immutable effective configuration plus tracking calibration path. The backend checks this using `configuration.Configuration`, not `engineering.Verification`. Explicit mapping must come from YAML or saved preferences; a built-in fallback alone is insufficient. RPY/tuning must be typed and finite, robot IP valid, calibration readable with the installation's expected hash, and frames must match Servo (`base_link`, `tool0`). The libsurvive file must be readable/nonempty once at backend startup; an initial missing/empty file is retried without requiring restart. Its native format is not parsed as strict JSON. Once available, this mutable persistence file is not monitored for byte changes: libsurvive rewrites metadata and station estimates during normal operation, including truncating writes. Live calibrated optical/pose guards remain authoritative. Robot kinematics file changes within a session still block until review/restart. Deliberate tracking recalibration or physical station movement still requires physical mapping review; a disk checksum cannot establish the running solver state.
+`engineering_context` retains its wire name for compatibility and carries the immutable effective configuration plus tracking calibration path. The backend checks this using `configuration.Configuration`, not `engineering.Verification`. Explicit mapping must come from YAML or saved preferences; a built-in fallback alone is insufficient. RPY/tuning must be typed and finite, robot IP valid, calibration readable with the installation's expected hash, and frames must match Servo (`base_link`, and `tool0` or configured `teleop_tcp`). The libsurvive file must be readable/nonempty once at backend startup; an initial missing/empty file is retried without requiring restart. Its native format is not parsed as strict JSON. Once available, this mutable persistence file is not monitored for byte changes: libsurvive rewrites metadata and station estimates during normal operation, including truncating writes. Live calibrated optical/pose guards remain authoritative. Robot kinematics file changes within a session still block until review/restart. Deliberate tracking recalibration or physical station movement still requires physical mapping review; a disk checksum cannot establish the running solver state.
 
 Checks run on the file worker every 0.5 s; results older than 2 s or for different current parameters cannot grant readiness. Configuration checks do not prove physical alignment or calibration ownership. Before operating a new/modified workcell, physically assess mapping, tool/TCP/payload, mounting and stopping behavior. Existing explicit saved configuration is reused without requiring evidence files or repeated GUI approvals.
 
@@ -254,3 +255,13 @@ Checks run on the file worker every 0.5 s; results older than 2 s or for differe
 | Quaternion norm error / future source tolerance | 0.2 / 30 ms |
 
 These limits validate observation quality; they are not robot stopping bounds. Changing them does not tune the actuator. The engine normalizes accepted quaternions and uses quaternion-relative world rotation. Neither GUI display ratios nor stored RPY are modified. Existing saved linear speed 1.5 m/s and yaw −40° remain distinct from YAML 0.10 m/s and −90°.
+
+## Tool TCP profile
+
+`robot.tcp_offset` is an optional six-number list `[x,y,z,rx,ry,rz]`: translation in metres relative to model `tool0`, followed by a rotation vector in radians. Translation norm must be ≤2 m and rotation-vector norm ≤2π; all values must be finite numbers (not booleans). This is startup-only and requires restart. These bounds validate input, not physical tool suitability.
+
+A version-1 `tool_tcp.json` beside the selected YAML overrides this key. Its fields are `version`, `robot_ip` (must match selected robot), and `offset`. The GUI writes it atomically. Missing profiles preserve legacy behavior; malformed profiles block loading. This is separate from `operator_settings.json`, whose version and tuning keys remain unchanged. Effective snapshots embed the resolved offset and never reread the mutable profile. The original UR kinematic calibration remains unchanged.
+
+The managed driver and Servo add the same fixed `tool0 → teleop_tcp` joint. Servo's semantic manipulator chain ends at this link, and teleop measures it. Cartesian limits/workspace checks therefore apply at the selected tip; native joint velocity/acceleration/jerk ownership is unchanged. Tool shape/payload are not inferred from the point.
+
+Configured TCP consistency uses output-only RTDE protocol 2 on robot port 30004 (`tcp_offset`, VECTOR6D). Reads run on the configuration worker using a new bounded connection (0.6 s total deadline) per check, avoiding old queued samples. Checks are scheduled at the existing 0.5 s configuration interval; results expire after 2 s. Difference tolerances are 10 µm translation and 10 µrad orientation. Mismatch/read failure blocks configuration readiness; this is not instantaneous detection. No input recipes, TCP-setting scripts, or motion commands are sent. Without a configured offset, automatic reads are disabled; the editor can still request a read while disarmed.

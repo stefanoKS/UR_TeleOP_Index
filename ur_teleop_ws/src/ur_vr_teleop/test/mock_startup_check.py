@@ -18,7 +18,18 @@ from ur_vr_teleop.desktop import ProcessManager
 os.environ['ROS_DOMAIN_ID'] = '148'
 os.environ['ROS_LOCALHOST_ONLY'] = '1'
 with tempfile.TemporaryDirectory(prefix='teleop_mock_startup_') as directory:
-    manager = ProcessManager('/home/ubuntu-ros/Documents/Teleop/ur_teleop/config/real_teleop.yaml')
+    config = '/home/ubuntu-ros/Documents/Teleop/ur_teleop/config/real_teleop.yaml'
+    tcp_test = os.environ.get('TELEOP_TEST_TCP') == '1'
+    if tcp_test:
+        import yaml
+        from ur_vr_teleop.preferences import load_settings_with_sources
+        settings, sources = load_settings_with_sources(config)
+        settings['robot']['tcp_offset'] = [.04, -.02, .2, .2, -.1, .3]
+        settings['teleop']['tool_frame'] = 'teleop_tcp'
+        settings['effective_sources'] = sources
+        config = Path(directory)/'config.yaml'
+        config.write_text(yaml.safe_dump(settings))
+    manager = ProcessManager(config)
     manager.directory = Path(directory)
     command = manager.commands(False)['driver']
     command = ['robot_ip:=127.0.0.1' if arg.startswith('robot_ip:=') else arg for arg in command]
@@ -41,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix='teleop_mock_startup_') as directory:
             transform = None
             while time.monotonic() < deadline:
                 rclpy.spin_once(node, timeout_sec=.05)
-                try: transform = buffer.lookup_transform('base_link', 'tool0', Time())
+                try: transform = buffer.lookup_transform('base_link', 'teleop_tcp' if tcp_test else 'tool0', Time())
                 except TransformException: pass
                 if joints and descriptions and transform is not None: break
                 assert process.poll() is None, log_path.read_text()[-4000:]
@@ -50,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='teleop_mock_startup_') as directory:
             plugins = ET.fromstring(descriptions[-1].data).findall('./ros2_control/hardware/plugin')
             assert len(plugins) == 1 and plugins[0].text.strip() in ('mock_components/GenericSystem', 'fake_components/GenericSystem')
             assert "Couldn't parse params file" not in log_path.read_text()
-            print('PASS: generated ROS parameters, GenericSystem, six joint states and base_link -> tool0 TF. Log:', log_path)
+            print('PASS: generated ROS parameters, GenericSystem, six joint states and '+('teleop_tcp' if tcp_test else 'tool0')+' TF. Log:', log_path)
         finally:
             if node: node.destroy_node()
             if rclpy.ok(): rclpy.shutdown()

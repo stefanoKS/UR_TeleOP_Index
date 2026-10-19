@@ -259,3 +259,35 @@ ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=147 /usr/bin/python3 ur_teleop_ws/src/ur_vr_t
 ```
 
 It records synthetic joint states using the installed rosbag CLI, checks that no final motion publisher or enable service exists, finalizes the bag and reads it back. It never launches a driver.
+
+## Tool endpoint regression
+
+In the sourced, localhost-only test environment above, additionally run:
+
+```bash
+TELEOP_TEST_TCP=1 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/servo_pipeline_check.py
+TELEOP_TEST_TCP=1 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/mock_startup_check.py
+```
+
+These use temporary profiles. The Servo check verifies through forward kinematics that angular demand holds the offset tip stationary while the flange translates. The mock check verifies the generated driver publishes the tip transform with GenericSystem. Unit tests cover rotation-vector conversion, immutable profiles, robot identity, output-only RTDE framing/rejections, disarmed editing, and mismatch/read-loss recovery. GUI checks use a mocked read and temporary profile; they do not connect to a robot.
+
+Remaining physical commissioning: confirm TCP calibration and coordinates against the pendant, actual RTDE availability alongside the installed driver, tip pose in Preview, supervised low-speed rotation/translation and stop/re-engagement behavior, plus tool payload/collision geometry. Automated results do not establish these physical properties.
+
+### Tool endpoint implementation validation (2026-10-16)
+
+Executed with system Python 3.10 and the rebuilt Humble overlay. ROS checks used localhost domains 147/148; no production driver/desktop or physical motion was launched.
+
+| Command (repository root unless noted) | Result |
+|---|---|
+| `colcon build --base-paths src --packages-select ur_vr_teleop --executor sequential` (inside `ur_teleop_ws`, system PATH, Humble sourced) | Passed; one package built |
+| `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test ur_teleop_ws/src/ur_vr_sim_teleop/test -q` | 391 passed; one upstream Python compatibility warning |
+| `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test/ros_integration_checks.py -q` | 91 passed, including TCP mismatch, unavailable feedback, expiry, disarm and recovery |
+| `/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/servo_pipeline_check.py` | Passed; 201 targets; 0.01 s horizon; zero/timeout/recovery checks passed |
+| `TELEOP_TEST_TCP=1 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/servo_pipeline_check.py` | Passed, including fixed-tip angular-command FK check and existing pipeline checks |
+| `TELEOP_TEST_TCP=1 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/mock_startup_check.py` | Passed; generated GenericSystem driver and offset-tip TF |
+| `/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/gui_render_check.py` | Passed, including mocked TCP read, mm conversion and temporary-profile save; editor screenshot inspected |
+| `/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/calibration_ros_check.py` | Passed; Preview capture/isolation/cleanup regression |
+| `/usr/bin/python3 -m compileall -q ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop ur_teleop_ws/src/ur_vr_teleop/launch` | Passed |
+| `git diff --check` and changed-document local-link checks | Passed |
+
+The initial pytest invocation lacked the overlay and failed collection; sourcing the rebuilt overlay resolved it. The first offset mock-startup test used incomplete synthetic snapshot source metadata; the test fixture was corrected and rerun successfully. Unaffected C++ packages were not rebuilt or retested. Real-robot RTDE/TCP import, physical tool calibration, collision geometry and motion/stopping validation remain unperformed. No live TCP profile was created and existing operator settings were preserved.

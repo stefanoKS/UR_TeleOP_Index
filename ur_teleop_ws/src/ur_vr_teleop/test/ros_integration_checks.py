@@ -964,3 +964,32 @@ def test_tracking_persistence_rewrite_does_not_block_but_optical_loss_does(node)
     node.on_optical(Bool(data=False))
     assert not node.gate.armed
     assert not node.arm(Trigger.Request(), Trigger.Response()).success
+
+
+@pytest.mark.parametrize('fault', ['mismatch', 'unavailable', 'expired'])
+def test_tcp_fault_disarms_existing_gate(node, monkeypatch, fault):
+    from ur_vr_teleop import tool_tcp
+    offset = [0., 0., .2, .1, -.2, .3]
+    node.tool = tool_tcp.FRAME
+    node.configuration.context['settings']['robot']['tcp_offset'] = offset
+    node.configuration.context['settings']['teleop']['tool_frame'] = tool_tcp.FRAME
+    monkeypatch.setattr(tool_tcp, 'read_offset', lambda ip: offset)
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    if fault == 'expired':
+        node.configuration_checked = time.monotonic()-2.1
+    else:
+        def read(ip):
+            if fault == 'unavailable': raise TimeoutError('TCP feedback unavailable')
+            return [0.]*6
+        monkeypatch.setattr(tool_tcp, 'read_offset', read)
+        node.configuration_valid = node.configuration.refresh(node.configuration_values())
+        node.configuration_reason = node.configuration.reason
+    node.tick()
+    assert not node.gate.armed
+    assert not node.arm(Trigger.Request(), Trigger.Response()).success
+    monkeypatch.setattr(tool_tcp, 'read_offset', lambda ip: offset)
+    healthy(node)
+    assert node.arm(Trigger.Request(), Trigger.Response()).success
+    assert node.core.state != 'ACTIVE'
+    assert node.command_pub is None

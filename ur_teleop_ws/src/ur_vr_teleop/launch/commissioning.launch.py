@@ -34,6 +34,10 @@ def nodes(context):
     }).toxml()
     semantic = xacro.process_file(str(moveit / 'srdf/ur.srdf.xacro'),
                                   mappings={'name': 'ur10e', 'prefix': ''}).toxml()
+    from ur_vr_teleop.tool_tcp import add_tool, tool_semantic, FRAME
+    offset = settings['robot'].get('tcp_offset')
+    xml = add_tool(xml, offset)
+    semantic = tool_semantic(semantic, offset)
     servo = yaml.safe_load((moveit / 'config/ur_servo.yaml').read_text())
     servo.update({
         'command_in_type': 'speed_units', 'publish_period': CONTROL_PERIOD_S,
@@ -46,7 +50,7 @@ def nodes(context):
         'publish_joint_accelerations': False, 'use_gazebo': False,
         'is_primary_planning_scene_monitor': True,
         'move_group_name': 'ur10e_manipulator', 'planning_frame': 'base_link',
-        'ee_frame_name': 'tool0', 'robot_link_command_frame': 'base_link',
+        'ee_frame_name': FRAME if offset is not None else 'tool0', 'robot_link_command_frame': 'base_link',
         'joint_topic': '/joint_states',
         'cartesian_command_in_topic': '/vr_real/servo_node/delta_twist_cmds',
         'joint_command_in_topic': '/vr_real/servo_node/delta_joint_cmds',

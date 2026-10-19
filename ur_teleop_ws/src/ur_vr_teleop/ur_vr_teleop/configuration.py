@@ -47,9 +47,14 @@ class Configuration:
                     raise ValueError(key+' must be finite and positive')
                 if key == 'servoj_lookahead_time' and not .03 <= value <= .2:
                     raise ValueError('servoj_lookahead_time must be between .03 and .2 s')
+            from .tool_tcp import FRAME, validate_offset, read_offset, matches
+            offset = robot.get('tcp_offset')
+            tool = FRAME if offset is not None else 'tool0'
+            if offset is not None:
+                validate_offset(offset)
             if any(original.get(k) != expected or values.get(k) != expected
-                   for k, expected in (('base_frame', 'base_link'), ('tool_frame', 'tool0'))):
-                raise ValueError('Configured frames must match Servo: base_link and tool0')
+                   for k, expected in (('base_frame', 'base_link'), ('tool_frame', tool))):
+                raise ValueError('Configured frames must match Servo: base_link and '+tool)
             calibration = Path(robot['calibration_file']).expanduser().read_bytes()
             data = yaml.safe_load(calibration)
             if data.get('kinematics', {}).get('hash') != CALIBRATION_HASH:
@@ -68,6 +73,13 @@ class Configuration:
             if self.robot_calibration_identity is not None and identity != self.robot_calibration_identity:
                 raise ValueError('Robot kinematics calibration file changed during this session; review robot configuration and restart')
             self.robot_calibration_identity = identity
+            if offset is not None:
+                try:
+                    observed = read_offset(robot['ip'])
+                except (OSError, ValueError) as error:
+                    raise ValueError('TCP feedback unavailable: '+str(error)) from error
+                if not matches(offset, observed):
+                    raise ValueError('Pendant TCP differs from saved tool tip; disarm, read/review TCP and restart')
             self.valid = True
             self.reason = 'Configuration present and consistent; physical alignment is an operator responsibility'
             self.technical = ''

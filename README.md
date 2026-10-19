@@ -10,6 +10,7 @@ The current implementation supports **either one or two calibrated Lighthouse st
 
 - Velocity mode (normal default): hand motion produces bounded Cartesian velocity; stationary hand motion produces zero demand.
 - Position mode: a clutch-relative pose target is followed with bounded Cartesian velocity.
+- Configurable tool-tip rotation centre with disarmed pendant TCP import; see [tool-tip setup](docs/OPERATION.md#change-the-tool-tip--rotation-centre).
 - Translation and rotation mapping, pose filters, spatial deadbands, configurable speed and acceleration limits.
 - Hold A to command; release to stop. Tracking faults invalidate the clutch and require release and a new press.
 - MoveIt Servo, collision/singularity monitoring, and a custom Ruckig controller upstream of the UR driver's position interface.

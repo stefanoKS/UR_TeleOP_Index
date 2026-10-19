@@ -15,7 +15,7 @@ import yaml
 from .process_ownership import SESSION_KEY, identity, is_same, tagged_processes, send_signal
 
 
-def tuned_description(description_share, destination, gain, lookahead):
+def tuned_description(description_share, destination, gain, lookahead, tcp_offset=None):
     """Local copy of three installed xacros; leave /opt and robot geometry intact."""
     if type(gain) is not int or not 100 <= gain <= 2000:
         raise ValueError('servoj_gain must be an integer from 100 to 2000')
@@ -41,6 +41,10 @@ def tuned_description(description_share, destination, gain, lookahead):
             raise RuntimeError('Cannot configure UR hardware parameter '+key)
     ET.fromstring(content)
     (destination/'ur.ros2_control.xacro').write_text(content)
+    if tcp_offset is not None:
+        from .tool_tcp import tool_xml
+        path = destination/'ur.urdf.xacro'
+        path.write_text(path.read_text().replace('</robot>', tool_xml(tcp_offset)+'</robot>'))
     return destination/'ur.urdf.xacro'
 
 
@@ -148,7 +152,7 @@ class ProcessManager:
         robot = settings['robot']
         generated = tuned_description(get_package_share_directory('ur_description'),
             self.directory/'description', robot.get('servoj_gain', 500),
-            robot.get('servoj_lookahead_time', .08))
+            robot.get('servoj_lookahead_time', .08), robot.get('tcp_offset'))
         controller_config = tuned_controllers(self.root/'config/commissioning_controllers.yaml',
                                               self.directory/'controllers.yaml', settings)
         driver = ['ros2', 'launch', 'ur_robot_driver', 'ur_control.launch.py', 'ur_type:=ur10e',

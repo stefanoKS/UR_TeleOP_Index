@@ -81,6 +81,10 @@ class OperatorGUI:
         self.process_worker = ManagerWorker(manager) if manager else None
         self.root.protocol('WM_DELETE_WINDOW', self.close); self.root.after(20, self.poll)
 
+    def open_tool_tcp(self):
+        from .tcp_panel import ToolTCPPanel
+        ToolTCPPanel(self)
+
     def _style(self):
         s = ttk.Style(); s.theme_use('clam')
         s.configure('App.TFrame', background=COLORS['bg']); s.configure('Card.TFrame', background=COLORS['card'], relief='solid', borderwidth=1)
@@ -99,6 +103,7 @@ class OperatorGUI:
     def _build(self):
         menu = tk.Menu(self.root)
         settings_menu = tk.Menu(menu, tearoff=False)
+        settings_menu.add_command(label='Tool tip / rotation centre', command=self.open_tool_tcp)
         settings_menu.add_command(label='Advanced tuning', command=lambda: (self.advanced_open.set(True), self.toggle_advanced()))
         menu.add_cascade(label='Settings', menu=settings_menu)
         self.root.configure(menu=menu)

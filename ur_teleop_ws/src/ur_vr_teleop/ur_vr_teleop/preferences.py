@@ -199,8 +199,17 @@ def load_settings_with_sources(config):
         saved = validate(document['parameters'])
         settings['teleop'].update(saved)
         sources.update({key: str(path) for key in saved})
+    from .tool_tcp import load_profile, FRAME, validate_offset
+    offset = load_profile(config, settings['robot'])
+    if offset is None:
+        offset = settings['robot'].get('tcp_offset')
+    if offset is not None:
+        settings['robot']['tcp_offset'] = validate_offset(offset)
+        settings['teleop']['tool_frame'] = FRAME
     for key in settings.get('robot', {}):
         sources['robot.' + key] = str(config)
+    if offset is not None:
+        sources['robot.tcp_offset'] = str(Path(config).with_name('tool_tcp.json')) if Path(config).with_name('tool_tcp.json').exists() else str(config)
     settings['teleop']['alignment_verified'] = False
     settings['teleop']['optical_loss_test_verified'] = False
     return settings, sources

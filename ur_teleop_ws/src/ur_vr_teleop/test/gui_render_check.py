@@ -55,6 +55,22 @@ def run():
             time.sleep(.01)
     try:
         pump(1.5)
+        # Tool editing is disarmed, read-only toward UR and saved only in this temp profile.
+        from ur_vr_teleop.tcp_panel import ToolTCPPanel
+        from unittest.mock import patch
+        gui.config_path.write_text('robot:\n  ip: 127.0.0.1\nteleop: {}\n')
+        tcp_panel = ToolTCPPanel(gui)
+        with patch('ur_vr_teleop.tcp_panel.read_offset', return_value=[.04, -.02, .2, .2, -.1, .3]):
+            tcp_panel.read(); pump(.2)
+        assert tcp_panel.values[2].get() == '200'
+        tcp_panel.window.update()
+        x, y = tcp_panel.window.winfo_rootx(), tcp_panel.window.winfo_rooty()
+        ImageGrab.grab(bbox=(x,y,x+tcp_panel.window.winfo_width(),y+tcp_panel.window.winfo_height())).save('/tmp/ur_teleop_tcp_panel.png')
+        tcp_panel.save()
+        assert json.loads((Path(temporary.name)/'tool_tcp.json').read_text())['offset'][2] == .2
+        assert 'Restart ROS' in gui.message.get()
+        tcp_panel.close()
+        (Path(temporary.name)/'tool_tcp.json').unlink()
         gui.open_camera();pump(.1)
         assert not gui.camera_window.closed
         gui.camera_window.close()
