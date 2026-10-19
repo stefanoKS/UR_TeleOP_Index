@@ -21,6 +21,7 @@ from .preferences import (DEFAULTS, PARAMETER_REGISTRY, PARAMETERS_BY_KEY,
 from .dashboard_state import (ParameterState, Notifications, equivalent, boolean, display_text,
                               vector, vector_text, station_text, motion_text)
 from .dashboard_process import ManagerWorker
+from .dashboard_ros import RosDataBridge, RosExecutorThread
 from .startup import Startup
 
 COLORS = {'navy': '#17263D', 'blue': '#2563EB', 'green': '#15803D', 'amber': '#D97706',
@@ -71,6 +72,7 @@ class OperatorGUI:
         except (OSError, ValueError, TypeError, KeyError):
             pass
         self.running_values, self.last_status = {}, {}
+        self.ros_data = RosDataBridge()
         self.native_reference = {}
         self.native_reference_at = -float('inf')
         self.last_status_at = self.heartbeat_at = -float('inf')
@@ -79,6 +81,7 @@ class OperatorGUI:
         self.fields, self.field_rows, self.field_widgets, self._loading_fields = {}, {}, {}, False
         self.root = tk.Tk(); self.root.title('UR10e Teleoperation Dashboard'); self.root.geometry('1440x900'); self.root.minsize(1280, 700)
         self.root.configure(bg=COLORS['bg']); self._style(); self._build(); self._interfaces()
+        self.ros_executor = RosExecutorThread(self.node)
         self.process_worker = ManagerWorker(manager) if manager else None
         self.root.protocol('WM_DELETE_WINDOW', self.close); self.root.after(20, self.poll)
 
@@ -101,7 +104,7 @@ class OperatorGUI:
             if fraction is not None and (type(fraction) not in (float, int) or not math.isfinite(fraction)):
                 return
             if isinstance(data, dict):
-                self.gripper_data, self.gripper_at = data, time.monotonic()
+                self.ros_data.put_latest('gripper', data)
         except (ValueError, TypeError):
             pass
 
@@ -319,22 +322,25 @@ class OperatorGUI:
         if not 0 <= age < .25:
             return
         order = [msg.joint_names.index(j) for j in JOINTS]
-        self.native_reference = {'position': [p.positions[j] for j in order], 'velocity': [p.velocities[j] for j in order]}
-        self.native_reference_at = time.monotonic()
+        value = {'position': [p.positions[j] for j in order], 'velocity': [p.velocities[j] for j in order]}
+        self.ros_data.put_latest('native_reference', value)
 
-    def on_camera_status(self,msg): self.camera_at,self.camera_text=time.monotonic(),msg.data
+    def on_camera_status(self,msg): self.ros_data.put_latest('camera_status', msg.data)
     def open_camera(self):
         if self.camera_window is None or self.camera_window.closed:
             from .camera_view import CameraView; self.camera_window=CameraView(self.root,self.node)
         else: self.camera_window.window.lift()
     def on_status(self,msg):
-        if self.closed:
-            return
         try:
             value=json.loads(msg.data)
         except (ValueError,TypeError):
             return
         if not isinstance(value,dict) or not isinstance(value.get('session_id'),str):
+            return
+        self.ros_data.put_status(value)
+
+    def apply_status(self, value, received_at):
+        if self.closed:
             return
         new=value['session_id']!=self.session
         if new:
@@ -369,7 +375,7 @@ class OperatorGUI:
         for key,var in [('alignment_verified',self.alignment),('optical_loss_test_verified',self.optical)]:
             if boolean(self.last_status,key) is True and boolean(value,key) is False:
                 var.set(False)
-        self.last_status,self.last_status_at=value,time.monotonic()
+        self.last_status,self.last_status_at=value,received_at
         self.load_running(value)
         if self.setup_wizard is not None:
             self.setup_wizard.observe(value, self.last_status_at)
@@ -379,6 +385,17 @@ class OperatorGUI:
         if not self.parameters.pending and self.settings_result and self.confirmation_pending is None:
             self.notify(self.settings_result,error='failed' in self.settings_result)
             self.settings_result=''
+
+    def drain_ros_data(self):
+        for _, kind, value, received_at in self.ros_data.drain():
+            if kind == 'status':
+                self.apply_status(value, received_at)
+            elif kind == 'gripper':
+                self.gripper_data, self.gripper_at = value, received_at
+            elif kind == 'native_reference':
+                self.native_reference, self.native_reference_at = value, received_at
+            elif kind == 'camera_status':
+                self.camera_text, self.camera_at = value, received_at
 
     def sync_draft(self):
         self.parameters.draft={k:v.get() for k,v in self.fields.items()}
@@ -774,8 +791,16 @@ class OperatorGUI:
             self.diagnostics.set('Diagnostics: Stale / Unavailable')
             self.lighthouse.set('Lighthouse 0: Unknown\nLighthouse 1: Unknown\nValid pose: Unknown')
             self.motion.set('Clutch displacement: Stale / not current')
-            self.set_banner('DISCONNECTED — WAITING FOR BACKEND',
-                            'No fresh backend status. Do not infer robot state; check the pendant.',COLORS['muted'])
+            if self.startup.state == 'ERROR':
+                failure=self.startup.last_failure or {}
+                detail=str(failure.get('message','Backend status lost'))
+                hint=str(failure.get('hint',''))
+                self.set_banner('FAULT — '+str(failure.get('stage','STARTUP')),
+                                detail+(' — '+hint if hint else ''),COLORS['red'])
+                self.header_state.set('FAULT')
+            else:
+                self.set_banner('DISCONNECTED — WAITING FOR BACKEND',
+                                'No fresh backend status. Do not infer robot state; check the pendant.',COLORS['muted'])
             for key in self.readiness:self.set_ready(key,None,'Unknown / status unavailable')
             return
         mode=str(d.get('mode','UNKNOWN'))
@@ -852,7 +877,7 @@ class OperatorGUI:
     def poll(self):
         if self.closed:return
         if self.shutdown_requested or not rclpy.ok():self.close();return
-        rclpy.spin_once(self.node,timeout_sec=0)
+        self.drain_ros_data()
         if self.process_worker:
             try:
                 message,busy=self.process_worker.events.get_nowait()
@@ -916,6 +941,9 @@ class OperatorGUI:
             if getattr(self,'gripper_panel',None) is not None:self.gripper_panel.close()
             if getattr(self,'camera_window',None) is not None:self.camera_window.close()
             if rclpy.ok():self.heartbeat.publish(Bool(data=False))
+            if getattr(self,'ros_executor',None):
+                self.ros_executor.close()
+                self.ros_executor.join()
         finally:self.root.destroy()
 
 

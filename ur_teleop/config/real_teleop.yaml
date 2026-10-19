@@ -49,4 +49,4 @@ camera:
 
 # Optional independent process; follow remains disabled until gripper.json is calibrated.
 gripper:
-  process_enabled: true
+  process_enabled: false

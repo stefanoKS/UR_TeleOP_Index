@@ -195,7 +195,12 @@ def test_generated_driver_command_stays_inactive(tmp_path):
     import yaml
     (tmp_path/'config').mkdir()
     shutil.copy('/home/ubuntu-ros/Documents/Teleop/ur_teleop/config/commissioning_controllers.yaml', tmp_path/'config/commissioning_controllers.yaml')
-    m = ProcessManager('/home/ubuntu-ros/Documents/Teleop/ur_teleop/config/real_teleop.yaml', root=tmp_path)
+    source=Path('/home/ubuntu-ros/Documents/Teleop/ur_teleop/config/real_teleop.yaml')
+    config=tmp_path/'config/real_teleop.yaml'
+    settings=yaml.safe_load(source.read_text())
+    settings['gripper']['process_enabled']=True
+    config.write_text(yaml.safe_dump(settings))
+    m = ProcessManager(config, root=tmp_path)
     m.directory = tmp_path/'logs'
     commands = m.commands(True)
     assert 'activate_joint_controller:=false' in commands['driver']
@@ -209,6 +214,10 @@ def test_generated_driver_command_stays_inactive(tmp_path):
     assert data['controller_manager']['ros__parameters']['scaled_joint_trajectory_controller']['type'] == 'ur_teleop_controllers/SmoothScaledJointTrajectoryController'
     assert data['scaled_joint_trajectory_controller']['ros__parameters']['smoothing.max_acceleration'] == 1.
     assert data['scaled_joint_trajectory_controller']['ros__parameters']['smoothing.max_jerk'] == 10.
+    settings['gripper']['process_enabled']=False
+    config.write_text(yaml.safe_dump(settings))
+    disabled=ProcessManager(config,root=tmp_path);disabled.directory=tmp_path/'disabled-logs'
+    assert 'gripper' not in disabled.commands(True)
 
 
 def test_ros_parser_catches_unquoted_empty_prefix(tmp_path):

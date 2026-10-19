@@ -101,6 +101,8 @@ def test_heartbeat_or_status_loss_retires_intent():
         d.update(operator_heartbeat_fresh=False)
         s.step(d,fresh,1)
         assert not s.requested and s.state=='ERROR'
+        if not fresh:
+            assert s.last_failure['stage']=='BACKEND STATUS LOST'
 
 
 def test_gui_stop_retains_inflight_enable_then_disarms_again():

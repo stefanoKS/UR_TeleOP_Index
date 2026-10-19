@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 from sensor_msgs.msg import Image
 from rclpy.qos import qos_profile_sensor_data
+from .dashboard_ros import LatestValue
 
 
 class CameraView:
@@ -19,7 +20,7 @@ class CameraView:
         self.label = ttk.Label(self.window, text='Waiting for camera frames…')
         self.label.pack()
         ttk.Label(self.window, text='Depth is in metres. Camera-to-tool transform is not calibrated.').pack(pady=8)
-        self.frames = {}
+        self.frames = {'rgb': LatestValue(), 'depth': LatestValue()}
         self.closed = False
         self.subscriptions = [node.create_subscription(Image, topic,
             lambda message, stream=stream: self.receive(stream, message), qos_profile_sensor_data)
@@ -29,14 +30,14 @@ class CameraView:
         self.window.after(200, self.render)
 
     def receive(self, stream, message):
-        self.frames[stream] = (time.monotonic(), message)
+        self.frames[stream].put((time.monotonic(), message))
 
     def render(self):
         if self.closed:
             return
         from PIL import Image as PILImage, ImageTk
         import numpy as np
-        frame = self.frames.get(self.mode.get())
+        frame = self.frames[self.mode.get()].get()
         if frame is None or time.monotonic()-frame[0] > 2.:
             self.label.configure(image='', text='No fresh camera frame — check camera status in the main window')
         else:
@@ -66,5 +67,6 @@ class CameraView:
         self.closed = True
         for subscription in self.subscriptions:
             self.node.destroy_subscription(subscription)
-        self.frames.clear()
+        for frame in self.frames.values():
+            frame.clear()
         self.window.destroy()

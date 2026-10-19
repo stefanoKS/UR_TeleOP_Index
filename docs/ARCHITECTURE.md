@@ -33,6 +33,8 @@ flowchart TD
 
 `desktop.py` owns child process groups, session logs, and configuration snapshots. It does not implement the control algorithm. `Commissioning` inherits the observation/TF handling in `Preview`, owns `TrackingClutch` and `Gate`, publishes Cartesian commands, and forwards accepted joint commands. `gate.py` validates joint trajectories and readiness separately from the Cartesian controller.
 
+The operator GUI services its ROS node continuously on a dedicated single-threaded executor thread. ROS callbacks validate messages and write to a thread-safe bridge; backend session/readiness/failure transitions remain ordered, while gripper, native-reference, camera-status and image telemetry use bounded latest-value storage. The Tk thread drains that bridge at 10 Hz and exclusively owns widgets, variables, window operations, notifications, startup state and service-result presentation. Service futures are completed by the ROS executor and interpreted by Tk with the existing generation/session checks. The 0.5 s backend watchdog therefore measures genuine status silence rather than Tk callback capacity.
+
 The managed stack uses ROS domain **43**, wall time, `/vr_real` for commissioning nodes, and the driver/controller manager at the root namespace. The bridge node is `/vr_controller_bridge`; commissioning is `/vr_real/teleop`; Servo is `/vr_real/servo_node`; the relay is `/vr_real/servo_stamp_relay`; the GUI is `/vr_real/teleop_operator_gui`.
 
 ## Tracking and coordinates
@@ -164,6 +166,8 @@ The standard controller exposes `control_msgs/action/FollowJointTrajectory`; tel
 ## Other paths
 
 The D405 uses a C++ librealsense capture child and Python ROS publisher, isolated from robot control. Its mount transform is not calibrated, and the image is not collision protection. Disconnects trigger retries without stopping robot ROS nodes.
+
+The optional camera window subscribes at the camera rate but retains only the latest RGB and depth frame for its 5 Hz Tk renderer. Opening or closing it does not change backend, gripper or robot telemetry rates.
 
 The domain-42 `ur_vr_sim_teleop` launch uses `GenericSystem`, `sim_` joints, a forward position controller, 100 Hz Servo, and the original 50 Hz position clutch. It rejects a non-mock URDF and starts motion disabled. It does not test the native real-path smoother or all commissioning checks. Mock integration tests separately exercise the production gate and Servo path on localhost domains 147/148.
 

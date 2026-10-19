@@ -94,6 +94,7 @@ class Startup:
             self.session = d.get('session_id')
         if not fresh:
             if self.seen_status or self.enabled or self.pending:
+                self.stage = 'BACKEND STATUS LOST'
                 self.fail('Backend status lost; enable intent retired',
                           'Check the ROS stack, then press START TELEOP.')
             else:

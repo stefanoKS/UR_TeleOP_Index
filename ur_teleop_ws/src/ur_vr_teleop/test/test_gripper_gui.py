@@ -3,15 +3,27 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
+from ur_vr_teleop.dashboard_ros import RosDataBridge
 from ur_vr_teleop.gui import OperatorGUI
 
 
 @pytest.mark.parametrize('data',[[],{'feedback':[]},{'identity':'bad'}, {'normalized_trigger':float('nan')}])
 def test_malformed_gripper_status_cannot_break_dashboard(data):
     gui=OperatorGUI.__new__(OperatorGUI)
-    gui.gripper_data={};gui.gripper_at=0
+    gui.ros_data=RosDataBridge()
     gui.on_gripper(SimpleNamespace(data=json.dumps(data)))
-    assert gui.gripper_data=={} and gui.gripper_at==0
+    assert not gui.ros_data.drain()
+
+
+def test_valid_gripper_status_is_coalesced_for_tk_thread():
+    gui=OperatorGUI.__new__(OperatorGUI)
+    gui.ros_data=RosDataBridge()
+    gui.on_gripper(SimpleNamespace(data=json.dumps({
+        'connection':'Disconnected','feedback':{},'identity':{'servo_id':1},
+        'normalized_trigger':.5,
+    })))
+    items=gui.ros_data.drain()
+    assert len(items)==1 and items[0][1]=='gripper'
 
 
 def test_stop_withdraws_calibration_consent_before_disarm():

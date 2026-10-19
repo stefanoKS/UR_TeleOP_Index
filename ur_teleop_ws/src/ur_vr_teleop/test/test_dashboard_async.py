@@ -6,6 +6,7 @@ import threading
 import time
 import pytest
 from ur_vr_teleop.dashboard_process import ManagerWorker
+from ur_vr_teleop.dashboard_ros import LatestValue, RosDataBridge
 from ur_vr_teleop.dashboard_state import ParameterState, Notifications
 from ur_vr_teleop.gui import OperatorGUI
 
@@ -106,6 +107,51 @@ def test_readback_timeout_does_not_leave_form_permanently_locked():
     g.check_readback(time.monotonic())
     assert not g.parameters.pending and not g.parameters.confirmed
     assert not g.settings_result and 'awaiting readback' in g.notifications.current
+
+
+def test_ros_bridge_coalesces_telemetry_and_preserves_status_transitions():
+    bridge=RosDataBridge()
+    bridge.put_latest('gripper',{'sample':1},1.)
+    bridge.put_latest('gripper',{'sample':2},2.)
+    bridge.put_status({'session_id':'one','armed':False,'reason':'waiting'},3.)
+    bridge.put_status({'session_id':'one','armed':False,'reason':'waiting'},4.)
+    bridge.put_status({'session_id':'one','armed':True,'reason':'ready'},5.)
+    bridge.put_status({'session_id':'two','armed':False,'reason':'restarted'},6.)
+    items=bridge.drain()
+    gripper=[item for item in items if item[1]=='gripper']
+    status=[item for item in items if item[1]=='status']
+    assert len(gripper)==1 and gripper[0][2]['sample']==2
+    assert [(item[2]['session_id'],item[2]['armed']) for item in status]==[
+        ('one',False),('one',True),('two',False)]
+    assert not bridge.drain()
+
+
+def test_latest_value_is_bounded_and_thread_safe():
+    mailbox=LatestValue()
+    threads=[threading.Thread(target=lambda start=start: [mailbox.put(start+i) for i in range(1000)])
+             for start in range(4)]
+    for thread in threads:thread.start()
+    for thread in threads:thread.join()
+    assert isinstance(mailbox.get(),int)
+    mailbox.clear();assert mailbox.get() is None
+
+
+def test_stale_backend_keeps_latched_startup_fault_banner():
+    g=OperatorGUI.__new__(OperatorGUI)
+    g.startup=SimpleNamespace(state='ERROR',last_failure={
+        'stage':'BACKEND STATUS LOST',
+        'message':'Backend status lost; enable intent retired',
+        'hint':'Check the ROS stack, then press START TELEOP.',
+    })
+    g.header_mode=Mock();g.header_state=Mock();g.stack_status=Mock()
+    g.header_badge=Mock();g.live_message=Mock();g.diagnostics=Mock();g.lighthouse=Mock();g.motion=Mock()
+    g.readiness={};g.set_banner=Mock();g.set_ready=Mock()
+    g.update_dashboard(True,{})
+    stage,detail,color=g.set_banner.call_args.args
+    assert stage=='FAULT — BACKEND STATUS LOST' and 'READY' not in stage
+    assert 'Backend status lost' in detail
+    assert color
+    g.header_state.set.assert_called_with('FAULT')
 
 
 @pytest.mark.parametrize('action,engineering,live', [('setup_preview',True,False),

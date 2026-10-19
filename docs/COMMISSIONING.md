@@ -149,9 +149,13 @@ The default `test_*.py` discovery does not run the separately named ROS check sc
 ```bash
 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/servo_pipeline_check.py
 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/mock_startup_check.py
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/gui_ros_load_check.py
+/usr/bin/python3 ur_teleop_ws/src/ur_bus_servo_gripper/test/ros_gripper_check.py
 ```
 
-The first launches actual Servo/RSP with synthetic joints on localhost domain 147 and no robot driver. It also holds Cartesian demand constant while injecting a 2.6 Hz measured-position oscillation: Servo velocity must remain below 0.01 rad/s for the 0.001 m/s test input. It checks zero-command output, suppression of stale-input output and recovery (the gate/native watchdogs own stopping after output ceases). The native C++ tests separately check the loaded Servo plugin, invalid input, moving-feedback rejection, reset and final Ruckig derivative limits. The second uses a generated UR driver launch with loopback IP, `GenericSystem`, dashboard disabled, and motion controller inactive on domain 148. Both scripts contain original absolute paths. `gui_render_check.py` is an additional display-dependent GUI check, not a physical test.
+The Servo check launches actual Servo/RSP with synthetic joints on localhost domain 147 and no robot driver. It also holds Cartesian demand constant while injecting a 2.6 Hz measured-position oscillation: Servo velocity must remain below 0.01 rad/s for the 0.001 m/s test input. It checks zero-command output, suppression of stale-input output and recovery (the gate/native watchdogs own stopping after output ceases). The native C++ tests separately check the loaded Servo plugin, invalid input, moving-feedback rejection, reset and final Ruckig derivative limits. The mock-startup check uses a generated UR driver launch with loopback IP, `GenericSystem`, dashboard disabled, and motion controller inactive on domain 148.
+
+`gui_ros_load_check.py` compares the former 10 Hz single-callback polling behavior with the dedicated GUI executor under synthetic 100 Hz backend status, 25 Hz gripper status, 100 Hz native references and optional 15 FPS 640x480 camera images. It asserts that threaded backend delivery stays below the 0.5 s watchdog and that stopping only backend status still retires startup while other traffic continues. `ros_gripper_check.py` uses fake serial feedback and verifies startup, pickup, loss, recovery, stale timestamps, STOP and absence of an arm-command publisher. `gui_render_check.py` is an additional display-dependent GUI check, not a physical test.
 
 Interactive mock simulation:
 

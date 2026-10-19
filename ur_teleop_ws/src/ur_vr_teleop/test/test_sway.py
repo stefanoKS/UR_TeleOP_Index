@@ -130,16 +130,18 @@ else:
 def test_gui_joint_monitor_requires_named_finite_fresh_reference():
     from types import SimpleNamespace
     from unittest.mock import Mock
+    from ur_vr_teleop.dashboard_ros import RosDataBridge
     from ur_vr_teleop.gui import OperatorGUI
     from ur_vr_teleop.validation import JOINTS
     from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-    g=OperatorGUI.__new__(OperatorGUI);g.native_reference={};g.node=Mock()
+    g=OperatorGUI.__new__(OperatorGUI);g.native_reference={};g.native_reference_at=-float('inf')
+    g.ros_data=RosDataBridge();g.node=Mock()
     g.node.get_clock.return_value.now.return_value=SimpleNamespace(nanoseconds=2_000_000_000)
     msg=JointTrajectory();msg.header.stamp.sec=2
     msg.joint_names=list(reversed(JOINTS));msg.points=[JointTrajectoryPoint(positions=[0.]*6,velocities=[1.,2.,3.,4.,5.,6.])]
-    g.on_native_reference(msg);assert g.native_reference['velocity']==[6.,5.,4.,3.,2.,1.]
+    g.on_native_reference(msg);g.drain_ros_data();assert g.native_reference['velocity']==[6.,5.,4.,3.,2.,1.]
     previous=g.native_reference_at
-    msg.points[0].velocities=[float('nan')]*6;g.on_native_reference(msg)
+    msg.points[0].velocities=[float('nan')]*6;g.on_native_reference(msg);g.drain_ros_data()
     assert g.native_reference_at==previous
-    msg.points[0].velocities=[0.]*6;msg.header.stamp.sec=1;g.on_native_reference(msg)
+    msg.points[0].velocities=[0.]*6;msg.header.stamp.sec=1;g.on_native_reference(msg);g.drain_ros_data()
     assert g.native_reference_at==previous
