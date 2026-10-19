@@ -23,22 +23,31 @@ Paths below are relative to the repository root.
 | Cartesian clutch/control/filtering | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/tracking.py` |
 | Pose continuity/jump/freeze checks | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/tracking_quality.py` |
 | Observation, TF, preview | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/preview.py` |
-| Dashboard program start state machine | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/program_control.py` |
+| One-button arm startup coordinator | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/startup.py` |
+| Dashboard program startup and verification state machine | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/program_control.py` |
 | Stop-dominant gripper authorization | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gripper_control.py` |
-| Bounded Dashboard shutdown adapter | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/dashboard_services.py` |
+| Bounded Dashboard service access and shutdown | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/dashboard_services.py` |
+| Approved External Control program configuration | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/program_panel.py` |
+| Gripper configuration GUI | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gripper_panel.py` |
+| Optional controller-driven Preview verification | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/calibration_capture.py`, `calibration_observer.py` |
 | Robot supervision and command orchestration | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/commissioning.py` |
 | Joint command validation and gating | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gate.py` |
 | Shared freshness/joint validation | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/validation.py` |
 | Servo and commissioning launch | `ur_teleop_ws/src/ur_vr_teleop/launch/commissioning.launch.py` |
 | Native UR controller integration | `ur_teleop_ws/src/ur_teleop_controllers/src/smooth_scaled_controller.cpp` |
 | Ruckig state/reference logic | `ur_teleop_ws/src/ur_teleop_controllers/include/ur_teleop_controllers/smoothing.hpp` |
-| One-button workflow | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/startup.py` |
+| Corrected Servo position processing | `ur_teleop_ws/src/ur_teleop_controllers/include/ur_teleop_controllers/servo_velocity_passthrough.hpp`, `src/servo_velocity_passthrough.cpp` |
 | Optional historical setup and legacy evidence import | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/engineering.py` |
 | Configuration readiness | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/configuration.py` |
 | Sway recording and offline analysis | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/sway_recording.py`, `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/sway_analysis.py` |
-| GUI | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gui.py` |
+| Tkinter operator interface | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/gui.py` |
+| ROS executor and GUI data bridge | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/dashboard_ros.py` |
+| Process-manager worker | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/dashboard_process.py` |
 | Settings validation/persistence | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/preferences.py` |
 | Managed process lifecycle/driver generation | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/desktop.py` |
+| Gripper ROS node and services | `ur_teleop_ws/src/ur_bus_servo_gripper/ur_bus_servo_gripper/gripper_node.py` |
+| Asynchronous gripper motor communications | `ur_teleop_ws/src/ur_bus_servo_gripper/ur_bus_servo_gripper/gripper_worker.py` |
+| Waveshare/ST3215 hardware protocol | `ur_teleop_ws/src/ur_bus_servo_gripper/ur_bus_servo_gripper/st3215_driver.py` |
 | Process identity/ownership | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/process_ownership.py` |
 | Joint diagnostics | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/joint_diagnostics.py` |
 | Offline comparisons | `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/comparison.py` |
@@ -124,8 +133,9 @@ A snapshot marked with `effective_sources` must not reread mutable preferences.
 Legacy confirmation parameters reset false and no longer grant readiness. Routine Live requires explicit valid configuration and runtime readiness, not verified_setup.json. Never manufacture physical validation or persist enable intent.
 Native joint limits and servoj tuning require restart; changing a ROS value alone is insufficient.
 Verify effective runtime settings rather than assuming YAML values are active.
-The committed saved linear speed is 1.5 m/s, versus YAML 0.10 m/s.
-The saved alignment yaw is −40°, versus YAML −90°; preserve this distinction in reports.
+The committed saved linear speed is 0.5 m/s, versus YAML 0.10 m/s.
+The committed saved angular speed is 60 deg/s, joint speed is 1.5 rad/s, and alignment yaw is −45°, versus YAML 30 deg/s, 0.5 rad/s and −90°.
+The committed saved profile selects Position; built-in/YAML mode is Velocity. Determine the actual session mode from effective runtime settings, not the file alone.
 Do not silently “correct” operator preferences in unrelated work.
 GUI ratios are inverse stored scales; deadbands/time constants may have display-unit conversions.
 If adding a tuning key, inspect DEFAULTS order and GUI indexing as well as validation and persistence.
@@ -146,8 +156,28 @@ Production uses domain 43 and wall time; mock test domains are localhost 147/148
 The desktop stops only owned process groups after checking identity.
 Preserve ownership tags, failure handling, and the distinction between required and optional children.
 Do not use broad process killing or remove an unknown session lock to “fix” startup.
-Camera/RViz failures are optional; driver/tracking/teleop failures stop the managed stack.
+Camera/RViz failures are optional and do not stop the robot stack.
+UR driver or teleop failure retires arm motion authorization, stops the affected arm processes, and retains healthy tracking and gripper processes. Independent gripper follow may continue only with fresh input and its own authorization.
+Tracking bridge failure stops the affected arm and tracking processes; retain gripper diagnostics if its node remains available, and never feed stale tracking to the gripper.
+Gripper failure is reported independently and must not terminate a healthy arm session.
+Full application shutdown/Stop ROS withdraws authorization, runs the bounded Dashboard shutdown, and terminates all owned processes.
+Restart with retained processes performs one owned-stack stop/start and must not duplicate tracking bridges, serial owners or driver nodes.
 The D405 view is not calibrated collision sensing.
+
+## Authorization ownership and stop semantics
+
+A controls the arm clutch. The Index analog trigger controls gripper movement.
+Gripper session authorization is independent of START TELEOP and A.
+STOP GRIPPER is independent of STOP TELEOP; STOP ALL withdraws both permissions.
+Late ENABLE GRIPPER acknowledgments must never override STOP; request generations and a fresh gripper heartbeat gate ENABLE.
+An unknown STOP result is not a successful stop. Keep the heartbeat withdrawn and block re-enable until status confirms or the operator retries STOP.
+Software STOP is not an emergency stop and does not guarantee zero physical stopping distance.
+
+## Source of truth and testing
+
+When documentation and implementation differ, use this order: current source code; current selected configuration and committed saved overrides; tests and verified observations; current documentation; historical implementation reports. Historical reports must not override newer code.
+
+For documentation-only work, verify every current-behavior claim against source/configuration and run link/Mermaid checks. For code changes: mock Dashboard integration tests for Dashboard behavior; fake-motor tests plus independent ROS checks for gripper behavior; ownership/crash/restart regressions for process lifecycle; relevant C++ and real-Servo integration checks for Servo/native smoothing. Never remove safeguards merely to make a test pass.
 
 ## Required development workflow
 

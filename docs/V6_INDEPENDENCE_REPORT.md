@@ -1,5 +1,7 @@
 # V6 — independent gripper, Dashboard program start and ordered shutdown
 
+> **Oscillation-status note:** the later Servo position-history correction and operator-reported outcome are described in [Sway diagnostics](SWAY_DIAGNOSTICS.md). The unresolved statement at the end reflects the state at the time of this report.
+
 > **Superseded for concurrency/lifecycle behavior by [V6.1 stabilization](V6_1_STABILIZATION_REPORT.md).** The V6 feature description remains useful; V6.1 changes stop priority, shared tracking retention, program identity and continuous verification.
 
 Date: 2026-10-19
@@ -93,7 +95,7 @@ See [Commissioning V6 checklist](COMMISSIONING.md#v6-hardware-validation-checkli
 
 - Real ST3215 ID/firmware/travel, trigger endpoints, USB fault/reconnect, holding behavior.
 - Real Remote Control/approved `.urp`, Dashboard Play, reverse-interface connection, no unintended motion, program stop before shutdown.
-- The previously reported UR10e wrist/arm oscillation remains unresolved; this work does not claim otherwise.
+- At the time of this report, the previously reported UR10e wrist/arm oscillation remained unresolved; this work did not claim otherwise. The later Servo correction and operator-reported outcome are documented separately, as noted above.
 
 ## Known limitations
 

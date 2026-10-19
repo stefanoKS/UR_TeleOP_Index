@@ -12,6 +12,8 @@ This reference covers application parameters, managed launch settings, and proje
 
 `alignment_verified` and `optical_loss_test_verified` reset to false at startup, even when a file says true. These are deprecated observational compatibility fields; neither is a readiness requirement. `motion_output_enabled` comes from launch mode. None of these is persisted operator permission. The GUI refreshes from effective status when the session ID changes.
 
+**Mode terminology:** `preferences.DEFAULTS` and `real_teleop.yaml` select Velocity, but the committed `operator_settings.json` selects Position. This file does not prove what a currently running robot session uses. Read the effective runtime mode and limits from the panel or `/vr_real/operator_status`; a saved-file change takes effect only in the next managed-stack snapshot.
+
 Inspect the panel, `/vr_real/operator_status`, ROS parameters, and session `effective_settings.log`. A snapshot records startup, not every subsequent runtime update. `preferences.py` is authoritative for saved-key validation; `commissioning.py` validates runtime updates.
 
 ## Teleop tuning
@@ -22,30 +24,30 @@ ROS runtime tuning uses floating-point parameters (and a double array for RPY); 
 
 | Parameter | Meaning / unit | YAML or default | Committed saved override | Allowed values | Override / apply |
 |---|---|---|---|---|---|
-| `teleop_control_mode` | Control law / enum | `velocity` | None | `position`, `velocity` | Saved/runtime; D |
-| `tracking_station_policy` | Station acceptance / enum | `any_station` | None | `any_station`; legacy `two_station_strict`, `single_station_experimental` normalize to it | Saved/runtime compatibility; D; hidden in GUI |
-| `single_station_motion_scale` | Legacy multiplier / ratio | 1.0 (code) | None | Input 0.01–1; effective scale always 1 | Saved/runtime compatibility; ignored, hidden |
+| `teleop_control_mode` | Control law / enum | `velocity` | **`position`** | `position`, `velocity` | Saved/runtime; D |
+| `tracking_station_policy` | Station acceptance / enum | `any_station` | `any_station` | `any_station`; legacy `two_station_strict`, `single_station_experimental` normalize to it | Saved/runtime compatibility; D; hidden in GUI |
+| `single_station_motion_scale` | Legacy multiplier / ratio | 1.0 (code) | 1.0 | Input 0.01–1; effective scale always 1 | Saved/runtime compatibility; ignored, hidden |
 | `translation_scale` | Robot displacement / hand displacement | 0.8333333333333334 | 1.0 | 0.01–10 | Saved/runtime; D; GUI shows inverse ratio |
 | `rotation_scale` | Robot rotation / hand rotation | 1.0 | 1.0 | 0.01–10 | Saved/runtime; D; GUI shows inverse ratio |
-| `max_linear_speed_m_s` | Cartesian linear norm cap / m/s | 0.10 | **1.5** | >0 | Saved/runtime; D |
-| `max_angular_speed_deg_s` | Cartesian angular norm cap / deg/s | 30 | **180** | >0 | Saved/runtime; D |
-| `max_joint_speed_rad_s` | Joint envelope/native velocity limit / rad/s | 0.50 | **2.0** | >0 | Saved; D + R for changed native limit |
+| `max_linear_speed_m_s` | Cartesian linear norm cap / m/s | 0.10 | **0.5** | >0 | Saved/runtime; D |
+| `max_angular_speed_deg_s` | Cartesian angular norm cap / deg/s | 30 | **60** | >0 | Saved/runtime; D |
+| `max_joint_speed_rad_s` | Joint envelope/native velocity limit / rad/s | 0.50 | **1.5** | >0 | Saved; D + R for changed native limit |
 | `tracking_gain_s_inv` | Position-error gain / 1/s | 2.0 | 2.0 | >0 | Saved/runtime; D; position mode demand only |
-| `max_linear_acceleration_m_s2` | Cartesian linear slew limit / m/s² | 0.25 | 0.15 | >0 | Saved/runtime; D |
-| `max_angular_acceleration_rad_s2` | Cartesian angular slew limit / rad/s² | 1.5707963267948966 | 0.3 | >0 | Saved/runtime; D |
-| `vr_translation_filter_alpha` | New-pose position EMA weight / ratio | 0.8 | 1.0 | >0 and ≤1; 1 disables | Saved/runtime; D |
-| `vr_rotation_filter_alpha` | New-pose orientation filter weight / ratio | 0.8 | 1.0 | >0 and ≤1; 1 disables | Saved/runtime; D |
-| `vr_translation_deadband_m` | Spatial hand deadband / m | 0.001 | 0.02 | 0–0.02 | Saved/runtime; D; GUI mm |
-| `vr_rotation_deadband_deg` | Spatial angular deadband / deg | 0.3 | 10.0 | 0–10 | Saved/runtime; D |
-| `translation_damping_gain` | Measured-tool linear velocity feedback / ratio | 0 | 0.5 | 0–1 | Saved/runtime; D; position mode only |
-| `rotation_damping_gain` | Measured-tool angular velocity feedback / ratio | 0 | 0.5 | 0–1 | Saved/runtime; D; position mode only |
-| `damping_velocity_filter_s` | Measured-velocity filter time / s | 0.05 | 0.2 | 0.005–0.2 | Saved/runtime; D; GUI ms |
-| `linear_velocity_filter_s` | Hand linear velocity EMA time / s | 0.04 | None | 0–0.2; 0 disables | Saved/runtime; D; velocity mode |
-| `angular_velocity_filter_s` | Hand angular velocity EMA time / s | 0.04 | None | 0–0.2; 0 disables | Saved/runtime; D; velocity mode |
+| `max_linear_acceleration_m_s2` | Cartesian linear slew limit / m/s² | 0.25 | **1.0** | >0 | Saved/runtime; D |
+| `max_angular_acceleration_rad_s2` | Cartesian angular slew limit / rad/s² | 1.5707963267948966 | **2.5** | >0 | Saved/runtime; D |
+| `vr_translation_filter_alpha` | New-pose position EMA weight / ratio | 0.8 | 0.8 | >0 and ≤1; 1 disables | Saved/runtime; D |
+| `vr_rotation_filter_alpha` | New-pose orientation filter weight / ratio | 0.8 | 0.8 | >0 and ≤1; 1 disables | Saved/runtime; D |
+| `vr_translation_deadband_m` | Spatial hand deadband / m | 0.001 | 0.001 | 0–0.02 | Saved/runtime; D; GUI mm |
+| `vr_rotation_deadband_deg` | Spatial angular deadband / deg | 0.3 | 0.3 | 0–10 | Saved/runtime; D |
+| `translation_damping_gain` | Measured-tool linear velocity feedback / ratio | 0 | 0 | 0–1 | Saved/runtime; D; position mode only |
+| `rotation_damping_gain` | Measured-tool angular velocity feedback / ratio | 0 | 0 | 0–1 | Saved/runtime; D; position mode only |
+| `damping_velocity_filter_s` | Measured-velocity filter time / s | 0.05 | 0.05 | 0.005–0.2 | Saved/runtime; D; GUI ms |
+| `linear_velocity_filter_s` | Hand linear velocity EMA time / s | 0.04 | 0.04 | 0–0.2; 0 disables | Saved/runtime; D; velocity mode |
+| `angular_velocity_filter_s` | Hand angular velocity EMA time / s | 0.04 | 0.04 | 0–0.2; 0 disables | Saved/runtime; D; velocity mode |
 | `joint_acceleration_warning_rad_s2` | Upstream diagnostic warning / rad/s² | 5.0 | 5.0 | >0 | Saved/runtime; D; not a command limiter |
-| `tracking_to_robot_rpy_deg` | Tracking-to-base roll/pitch/yaw / deg | [0, 0, −90] | **[0, 0, −40]** | Three finite numbers | Saved/runtime; D; mapping change requires physical review and a fresh configuration check |
+| `tracking_to_robot_rpy_deg` | Tracking-to-base roll/pitch/yaw / deg | [0, 0, −90] | **[0, 0, −45]** | Three finite numbers | Saved/runtime; D; mapping change requires physical review and a fresh configuration check |
 
-“None” means no saved key, so YAML/default supplies it. Existing high saved values are not commissioning recommendations. Do not silently replace them in documentation or assume YAML is active.
+“None” means no saved key, so YAML/default supplies it. These committed saved values are not commissioning recommendations. The built-in/YAML default mode is Velocity, while the committed saved override selects Position; the actual session mode and limits must be read from effective runtime status. Do not silently replace saved preferences or assume YAML is active.
 
 ### Other commissioning and preview parameters
 
@@ -63,7 +65,7 @@ These are not persisted tuning keys. Directly instantiating a node can differ fr
 | `motion_output_enabled` | Create final command publisher / bool | false | true/false | Launch/desktop; restart; not permission to move |
 | `use_sim_time` | ROS clock source / bool | false | Production Preview rejects true | Keep false; startup |
 
-Standalone `preview` uses `translation_scale=0.8`, read-only, and the original observation-only clutch. It does not perform the commissioning optical gate and cannot command motion. Managed Preview uses `commissioning` with output disabled. Direct `Commissioning` declares `tracking_to_robot_rpy_deg=[0,0,0]`; the normal config loader supplies −90° or the saved −40° instead. These entry points are not interchangeable.
+Standalone `preview` uses `translation_scale=0.8`, read-only, and the original observation-only clutch. It does not perform the commissioning optical gate and cannot command motion. Managed Preview uses `commissioning` with output disabled. Direct `Commissioning` declares `tracking_to_robot_rpy_deg=[0,0,0]`; the normal config loader supplies −90° or the saved −45° instead. These entry points are not interchangeable.
 
 ## Robot and camera YAML
 
@@ -137,7 +139,7 @@ Source: `ur_teleop/config/commissioning_controllers.yaml`, specialized by `deskt
 | Parameter | Meaning / unit | Project value | Allowed / effective behavior | Apply |
 |---|---|---|---|---|
 | Controller `type` | Plugin class | `ur_teleop_controllers/SmoothScaledJointTrajectoryController` | Must match installed plugin | Restart |
-| `smoothing.max_velocity` | Native joint speed / rad/s | 0.5 template/code; generated from effective `max_joint_speed_rad_s` (saved 2) | Finite >0 | Restart |
+| `smoothing.max_velocity` | Native joint speed / rad/s | 0.5 template/code; generated from effective `max_joint_speed_rad_s` (saved 1.5) | Finite >0 | Restart |
 | `smoothing.max_acceleration` | Native acceleration / rad/s² | 1.0 | Finite >0; generated from robot YAML | Restart |
 | `smoothing.max_jerk` | Native jerk / rad/s³ | 10.0 | Finite >0; generated from robot YAML | Restart |
 | `smoothing.max_following_error` | Measured/reference deviation / rad | 0.10 | >0 and ≤0.20 | Restart |
@@ -264,7 +266,7 @@ Checks run on the file worker every 0.5 s; results older than 2 s or for differe
 | Exactly frozen source pose | 500 ms |
 | Quaternion norm error / future source tolerance | 0.2 / 30 ms |
 
-These limits validate observation quality; they are not robot stopping bounds. Changing them does not tune the actuator. The engine normalizes accepted quaternions and uses quaternion-relative world rotation. Neither GUI display ratios nor stored RPY are modified. Existing saved linear speed 1.5 m/s and yaw −40° remain distinct from YAML 0.10 m/s and −90°.
+These limits validate observation quality; they are not robot stopping bounds. Changing them does not tune the actuator. The engine normalizes accepted quaternions and uses quaternion-relative world rotation. Neither GUI display ratios nor stored RPY are modified. Existing saved linear speed 0.5 m/s and yaw −45° remain distinct from YAML 0.10 m/s and −90°.
 
 ## Tool TCP profile
 

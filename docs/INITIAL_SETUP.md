@@ -6,17 +6,17 @@ Configuration readiness means explicit, typed, internally consistent configurati
 
 Engineering tools retain **Optional commissioning observations** and managed Preview. This tool still records six-direction capture and supervised stopping observations if useful for site records. Opening it requests disarm. Saving historical evidence does not enable motion, and not completing it does not block ordinary Start. Its source identity and migration checks are deliberately unchanged; do not broaden old compatibility exceptions to conceal changed control code.
 
-For the immediate development task, use [Sway diagnostics](SWAY_DIAGNOSTICS.md). No motion-control algorithm has been changed and no physical cause has been identified.
+The optional observations tool does not alter motion-control software. Servo filtering, Cartesian control, joint gating and native smoothing are separate from setup evidence; [Sway diagnostics](SWAY_DIAGNOSTICS.md) covers that independent correction. Completing or skipping setup observations does not enable motion and does not change limits.
 
 ## Historical V5 procedure (superseded)
 
-The material below preserves the earlier commissioning report. Its automatic opening, mandatory evidence, runtime record checking, session-confirmation and rollback descriptions are obsolete. Current operation is described above and in [Operation](OPERATION.md). In the retained optional tool, “Apply Preview results” retains observations locally; Start uses normal configuration/runtime readiness.
+> **Historical material — not a current procedure.** Everything from this point to the final V5 validation section describes an earlier implementation and is retained only for provenance. Its automatic wizard launch, mandatory evidence, eleven-test requirement, runtime record checking, session-confirmation, expiry/signature handling and rollback behavior are obsolete. Do not follow these steps as current instructions. Current operation is the optional observation workflow above and [Operation](OPERATION.md).
 
-# Initial Setup Wizard
+# Historical V5 Initial Setup Wizard (superseded)
 
-The managed application now creates its own local verified setup. First launch opens the wizard after the backend reports that no matching setup exists. An unchanged verified installation opens the ordinary dashboard: **START TELEOP → wait for READY → hold A**. No daily confirmations, external signed report, record-generation command or approval expiration date is needed.
+The V5 implementation created its own local verified setup. At that time, first launch opened the wizard after the backend reported that no matching setup existed. Current builds do not do this: an unchanged installation opens the ordinary dashboard and routine operation is **START TELEOP → wait for READY → hold A**. No daily confirmations, external signed report, record-generation command or approval expiration date is required.
 
-No physical validation or valid production setup was created by this implementation. Screenshots and automated tests use synthetic telemetry; they are not robot commissioning evidence.
+No physical validation or valid production setup was created by that implementation. Screenshots and automated tests used synthetic telemetry; they are not robot commissioning evidence.
 
 ## One-time operator procedure
 

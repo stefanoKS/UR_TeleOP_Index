@@ -53,7 +53,7 @@ All changes take effect on a read-only reconnect/reload, while stationary and di
 
 | Key | Default | Validation / units |
 |---|---:|---|
-| `enabled` | false | Boolean; permit normal follow after START |
+| `enabled` | false | Boolean; permit normal follow after an explicit **ENABLE GRIPPER** and fresh gripper heartbeat. START TELEOP is not required. |
 | `port` | empty | `/dev/serial/by-id/...` preferred; `/dev/...` fallback |
 | `servo_id` | -1 | -1 discovery or integer 0–253; enabled profile requires verified ID |
 | `open_ticks`, `closed_ticks` | 0, 0 | Integer 0–4095; distinct for movement |
@@ -76,7 +76,7 @@ No settings alter firmware limits/offsets, disable motor protection, or treat wr
 
 Normal operation: **ENABLE GRIPPER** when the gripper profile is calibrated and connected, synchronize the trigger, then use A for the arm and the trigger for the gripper. START TELEOP, Servo, External Control and the UR driver are **not** required for gripper follow. Releasing A does not open or close the gripper and does not withdraw follow. Gripper follow separately requires: a latched session enable from `/gripper/set_enabled`, an enabled calibrated profile, fresh serial feedback, a healthy motor, fresh Joy/pose/optical bridge signals, the gripper operator heartbeat, and deliberate trigger pickup. The node rejects ENABLE while the gripper heartbeat is stale/withdrawn, so a late request sent before STOP cannot re-enable follow. STOP is dominant over an in-flight ENABLE; the GUI discards a late ENABLE acknowledgment by request generation. A gripper fault does not withdraw arm authorization. Conversely, an arm fault does not stop an otherwise healthy gripper session while the shared tracking bridge remains healthy.
 
-Pickup requires a fresh deliberate trigger excursion of at least 5 percentage points and then matching the measured encoder-derived closure within 3 percentage points. No target is written during pickup. This repeats after START, reconnect, tracking/input loss, backend session change or authorization withdrawal. A stationary matching trigger alone cannot re-enable follow. If the actual position is outside the endpoint interval, use supervised calibration to bring it into the reviewed interval.
+Pickup requires a fresh deliberate trigger excursion of at least 5 percentage points and then matching the measured encoder-derived closure within 3 percentage points. No target is written during pickup. This repeats after an explicit new **ENABLE GRIPPER**, reconnect, tracking/input loss, backend session change or authorization withdrawal. START TELEOP is not a gripper pickup trigger. A stationary matching trigger alone cannot re-enable follow. If the actual position is outside the endpoint interval, use supervised calibration to bring it into the reviewed interval.
 
 The fraction is normalized, optionally inverted and rescaled between endpoint deadzones. The target is `round(open + fraction * (closed - open))`, clamped to the reviewed travel. Examples 1000/2300 at fractions 0/.25/.5/.75/1 yield 1000/1325/1650/1975/2300 when deadzone is zero. The serial worker runs at at most **25 Hz**, retains only latest input and one pending explicit action, and never queues a stream of motor commands. Software target increments use elapsed monotonic time capped at 40 ms and the configured ticks/s limit; target lead is at most 20 ticks from the latest feedback. Calibration additionally caps target rate at 25 ticks/s, SDK speed at 50 and acceleration at 5.
 

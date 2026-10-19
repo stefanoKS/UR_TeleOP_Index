@@ -1,5 +1,7 @@
 # V4 one-button startup implementation report
 
+> **Historical values and requirements.** The V4 setup evidence described below is no longer required for routine readiness, and the numeric saved overrides quoted at the end were read before the current profile. Current operation is **START TELEOP → READY → hold A** with explicit configuration and runtime readiness. See [Configuration](CONFIGURATION.md).
+
 Implemented locally against `ddcad899e8e378aa62c71dee5f6feacbd17447b8`; remote HEAD matched that revision when checked. The pre-existing edit to `ur_teleop/config/operator_settings.json` was preserved. No physical robot session was launched, no engineering record was issued, and no hardware performance is claimed.
 
 ## Operator result

@@ -1,5 +1,7 @@
 # UI V3.1 stabilization report
 
+> **Historical values.** Numeric saved overrides quoted below were read at the time of this report. They do not describe the current committed profile (0.5 m/s, 60 deg/s, 1.5 rad/s, −45°, Position); see [Configuration](CONFIGURATION.md).
+
 Reviewed branch: `main`. Starting commit:
 `93adb5c780e72cf91d74e72e0403fa9c7052721e`
 (`Add ParameterSpec dataclass for operator settings and dashboard presentation`).
@@ -130,7 +132,7 @@ Only GUI/state/process-lifecycle integration, tests, documentation, numeric
 display precision and read-only status publishing changed. **No motion-control
 or safety-gating behavior changed.** The production chain and every tracking,
 Cartesian, Servo, gate, native Ruckig and UR-driver limit remain owned by their
-existing stages. Committed 1.5 m/s speed and −40° alignment overrides are intact.
+existing stages. At the time of this report, the committed 1.5 m/s speed and −40° alignment overrides were intact; the current saved profile differs as noted at the top.
 
 Remaining supervised physical checks: actual dashboard/driver reconnects under
 site network conditions, manual mapping and optical-loss procedures, each

@@ -1,37 +1,58 @@
 # Architecture
 
-This guide describes the source at revision `c7373d9` plus the documentation update. It describes implemented behavior, not certification or proof of physical performance. See [configuration](CONFIGURATION.md) for values and [commissioning](COMMISSIONING.md) for validation boundaries.
+This guide describes the current architecture; it is not a certification or proof of physical performance. A documentation audit against HEAD `c98343624e7009af5cc20d6ec5f69aaebe208e3b` (2026-10-19) verified the paths and interfaces below. Historical reports remain historical and must not override current source. See [configuration](CONFIGURATION.md) for values and [commissioning](COMMISSIONING.md) for validation boundaries.
 
 ## Processes and responsibilities
 
 ```mermaid
-flowchart TD
-    Desktop[desktop.py process owner] --> Driver[UR driver and controller_manager]
-    Desktop --> Bridge[controller_bridge.cpp and libsurvive]
-    Desktop --> Launch[commissioning.launch.py]
-    Desktop --> Camera[D405 capture and publisher]
-    Driver --> Model[robot_state_publisher and robot model]
-    Launch --> Servo[MoveIt Servo]
-    Launch --> Relay[servo_stamp_relay.cpp]
-    Launch --> Commission[commissioning.py]
-    Bridge --> Quality[tracking_quality.py]
-    Quality --> Tracking[tracking.py TrackingClutch]
-    Tracking --> Commission
-    Commission --> Servo
-    Servo --> Relay
-    Relay --> Gate[gate.py]
-    Gate --> Controller[SmoothScaledJointTrajectoryController]
-    Controller --> Driver
-    Driver --> UR[UR10e servoj]
-    Driver --> Measured[Joint states and robot status]
-    Measured --> Model
-    Model --> Commission
-    Measured --> Commission
-    GUI[gui.py] --> Commission
-    Commission --> GUI
+flowchart LR
+    Index[Valve Index controller]
+    Survive[libsurvive bridge / pose guard]
+
+    subgraph Arm["A. Arm teleoperation"]
+        A1[tracking.py / TrackingClutch]
+        A2[MoveIt Servo]
+        A3[servo_stamp_relay]
+        A4[gate.py]
+        A5[SmoothScaledJointTrajectoryController / Ruckig]
+        A6[UR driver]
+        A7[UR10e]
+    end
+
+    subgraph Grip["B. Independent gripper"]
+        G1[gripper_node.py]
+        G2[independent authorization and pickup]
+        G3[gripper_worker.py]
+        G4[st3215_driver.py]
+        G5[Waveshare Bus Servo Adapter A]
+        G6[ST3215 motor]
+    end
+
+    subgraph App["C. Application management"]
+        GUI[Tkinter GUI]
+        Start[arm startup coordinator]
+        Prog[Dashboard program control and verification]
+        Dash[UR Dashboard services]
+        URP[approved External Control .urp]
+        Gctl[independent gripper enable / stop]
+        PM[process manager]
+        Owned[owned ROS processes]
+    end
+
+    Index -->|A button| Survive
+    Index -->|analog trigger| Survive
+    Survive -->|shared pose / Joy / optical signals| A1
+    Survive -->|shared Joy / pose_fresh / optical_fresh| G1
+    A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7
+    G1 --> G2 --> G3 --> G4 --> G5 --> G6
+    GUI --> Start --> Prog --> Dash --> URP
+    GUI --> Gctl --> G1
+    GUI --> PM --> Owned
 ```
 
-`desktop.py` owns child process groups, session logs, and configuration snapshots. It does not implement the control algorithm. `Commissioning` inherits the observation/TF handling in `Preview`, owns `TrackingClutch` and `Gate`, publishes Cartesian commands, and forwards accepted joint commands. `gate.py` validates joint trajectories and readiness separately from the Cartesian controller.
+Tracking is shared, but authorization and actuation are separate. The arm path uses A, Servo, the timestamp relay, the motion gate, the native controller and the UR driver. The gripper path consumes the same controller's analog trigger and bridge signals but has its own session enable, heartbeat, pickup and ST3215 serial chain; it has no dependency on A, Servo, arm motion readiness or External Control. The Dashboard Server is an application-management interface: it loads, plays, stops and reports the approved External Control program. It does not send ordinary real-time Cartesian motion commands.
+
+`desktop.py` owns child process groups, session logs, and configuration snapshots. It does not implement the control algorithm. `Commissioning` inherits the observation/TF handling in `Preview`, owns `TrackingClutch` and `Gate`, publishes Cartesian commands, and forwards accepted joint commands. `gate.py` validates joint trajectories and readiness separately from the Cartesian controller. `dashboard_process.py` serializes process-manager actions; `dashboard_ros.py` owns the GUI ROS executor and thread-safe data bridge; `program_control.py`/`dashboard_services.py` own Dashboard start verification and ordered shutdown.
 
 The operator GUI services its ROS node continuously on a dedicated single-threaded executor thread. ROS callbacks validate messages and write to a thread-safe bridge; backend session/readiness/failure transitions remain ordered, while gripper, native-reference, camera-status and image telemetry use bounded latest-value storage. The Tk thread drains that bridge at 10 Hz and exclusively owns widgets, variables, window operations, notifications, startup state and service-result presentation. Service futures are completed by the ROS executor and interpreted by Tk with the existing generation/session checks. The 0.5 s backend watchdog therefore measures genuine status silence rather than Tk callback capacity.
 
@@ -51,7 +72,7 @@ The inspected libsurvive revision can seed from one station and solve against av
 
 ## Cartesian modes and clutch
 
-`tracking.py` uses the simulation core's pose/quaternion utilities but adds real-path quality and velocity behavior. Standalone `TrackingClutch` retains a position-mode API default; commissioning explicitly selects its configured mode, normally **velocity**.
+`tracking.py` uses the simulation core's pose/quaternion utilities but adds real-path quality and velocity behavior. Standalone `TrackingClutch` retains a position-mode API default; commissioning selects its effective configured mode. The built-in/YAML default is **velocity**, while the committed saved profile selects **position**.
 
 | Stage | Position mode | Velocity mode |
 |---|---|---|
@@ -69,7 +90,7 @@ Clutch states require a healthy released A button before a new press can enter a
 
 Commissioning emits `TwistStamped` at **100 Hz** in `base_link`. MoveIt Servo converts it to six-joint `JointTrajectory` position and velocity targets at **100 Hz**; acceleration output is disabled. The model includes UR kinematic calibration, semantic group `ur10e_manipulator`, joint limits, collision checks, and singularity handling.
 
-Production selects `ur_teleop_controllers::ServoVelocityPassthrough` for Servo's smoothing interface. Humble Servo derives output velocity from `(position_target - measured_position) / publish_period`; filtering absolute position targets here feeds lagged measured motion back into that velocity. The plugin leaves finite six-joint position targets unchanged, so Servo's collision/singularity-scaled joint increment determines velocity. Cartesian filtering remains upstream and final joint velocity/acceleration/jerk limiting remains in native Ruckig. No extra velocity filter or feedback correction is introduced. This plugin is for the supervised native controller chain; the separate simulator retains its existing configuration. Invalid plugin input stops Servo rather than silently passing it through.
+Production selects `ur_teleop_controllers::ServoVelocityPassthrough` for Servo's smoothing interface. Humble Servo derives output velocity from `(position_target - measured_position) / publish_period`; filtering absolute position targets here feeds lagged measured motion back into that velocity. The plugin leaves finite six-joint position targets unchanged, so Servo's collision/singularity-scaled joint increment determines velocity. This removes that delayed position-history term only: it does not disable the VR hand pose/velocity filters, Cartesian speed/acceleration bounds, collision or singularity checks, Servo timestamps, gate checks, or final Ruckig velocity/acceleration/jerk limiting. The native controller and UR `servoj` path remain in place. The plugin is for the supervised native controller chain; the separate simulator retains its existing configuration. Invalid plugin input stops Servo rather than silently passing it through.
 
 The relay preserves an existing header timestamp or uses the DDS source timestamp for an unstamped message. It does not make old data fresh by stamping receipt time. The gate checks source order/age, finite values, exact joint membership, horizon **0.005–0.10 s**, and command age below **0.10 s**. Before-clutch buffered commands are rejected. With verified native smoothing, requested joint position lead is bounded at **0.05 rad**; without it the conservative speed/time envelope applies. Supplied velocities/accelerations are also checked.
 
@@ -95,7 +116,7 @@ sequenceDiagram
     participant Servo
     participant Gate
     participant Controller
-    Operator->>GUI: START TELEOP after engineering commissioning
+    Operator->>GUI: START TELEOP with valid configuration readiness
     GUI->>Teleop: Enable intent and heartbeat
     Operator->>Teleop: Release A then press A
     Teleop->>Teleop: Capture fresh baseline
@@ -147,6 +168,12 @@ Rates are configured timer/output targets, not measured timing guarantees. Names
 | `/vr_real/armed` | `std_msgs/Bool` | Teleop readiness state; 100 Hz |
 | `/vr_real/preview_state` | `std_msgs/String` | Teleop textual diagnostics; 100 Hz commissioning / 50 Hz standalone preview |
 | `/vr_real/preview_markers` | `visualization_msgs/MarkerArray` | Preview target and measured markers, same timer |
+| `/gripper/status` | `std_msgs/String` | Gripper node JSON observation and diagnostics; 25 Hz |
+| `/gripper/joint_states` | `sensor_msgs/JointState` | Actual ST3215 encoder feedback only; new feedback samples |
+| `/gripper/target_fraction` | `std_msgs/Float64` | Latest valid normalized trigger request; observational, not measured closure |
+| `/gripper/target_ticks` | `std_msgs/Int32` | Acknowledged bounded target command; emitted only on a write |
+| `/gripper/operator_present` | `std_msgs/Bool` | GUI → gripper node heartbeat; 10 Hz, 250 ms authorization deadline |
+| `/gripper/calibration_present` | `std_msgs/Bool` | Gripper Setup calibration-consent heartbeat; independent of arm enable |
 | `/wrist_camera/color/image_raw`, `/wrist_camera/depth/image_raw` | `sensor_msgs/Image` | Camera → viewer; 640×480, 15 fps, RGB8 / 32FC1 metres |
 | `/wrist_camera/color/camera_info`, `/wrist_camera/depth/camera_info` | `sensor_msgs/CameraInfo` | Camera intrinsics, per image |
 | `/wrist_camera/status` | `std_msgs/String` | Camera availability; transient-local |
@@ -160,6 +187,19 @@ Rates are configured timer/output targets, not measured timing guarantees. Names
 | `/controller_manager/list_controllers` | `controller_manager_msgs/srv/ListControllers` | Ownership/readiness polling |
 | `/controller_manager/switch_controller` | `controller_manager_msgs/srv/SwitchController` | GUI startup coordinator requests scaled controller activation; does not stop a competitor |
 | `/scaled_joint_trajectory_controller/get_parameters` | `rcl_interfaces/srv/GetParameters` | Verify watchdog and native smoothing parameters |
+| `/gripper/connect`, `/gripper/read`, `/gripper/reload` | `std_srvs/srv/Trigger` | Read-only discovery, feedback request and profile reload; no arm dependency |
+| `/gripper/jog_open`, `/gripper/jog_close`, `/gripper/open`, `/gripper/close`, `/gripper/follow` | `std_srvs/srv/Trigger` | Bounded calibration/test motion; require explicit gripper calibration consent |
+| `/gripper/set_enabled` | `std_srvs/srv/SetBool` | Independent gripper session authorization; ENABLE requires a fresh gripper heartbeat, STOP always wins |
+| `/dashboard_client/is_in_remote_control` | `ur_dashboard_msgs/srv/IsInRemoteControl` | Application management: Remote Control observation |
+| `/dashboard_client/get_robot_mode` | `ur_dashboard_msgs/srv/GetRobotMode` | Application management: RUNNING-mode precheck |
+| `/dashboard_client/get_safety_mode` | `ur_dashboard_msgs/srv/GetSafetyMode` | Application management: safety precheck |
+| `/dashboard_client/get_loaded_program` | `ur_dashboard_msgs/srv/GetLoadedProgram` | Application management: exact approved-program identity readback |
+| `/dashboard_client/program_running` | `ur_dashboard_msgs/srv/IsProgramRunning` | Application management: running-state readback for READY and shutdown |
+| `/dashboard_client/load_program` | `ur_dashboard_msgs/srv/Load` | Application management: load the approved `.urp`; never an arbitrary program |
+| `/dashboard_client/play` | `std_srvs/srv/Trigger` | Application management: request Play; acknowledgment alone is not readiness |
+| `/dashboard_client/stop` | `std_srvs/srv/Trigger` | Application management: ordered shutdown request; requires running-state readback confirmation |
+
+The gripper status/target topics are observations or requests; `/gripper/set_enabled` is an authorization control; actual actuator commands exist only as bounded writes inside `gripper_worker.py`/`st3215_driver.py` to the ST3215. Dashboard service success is transport/command acceptance, not proof that a program is running, that Cartesian motion occurred, or that physical stopping is complete. Dashboard readback and driver readiness remain authoritative.
 
 The standard controller exposes `control_msgs/action/FollowJointTrajectory`; teleop does not send action goals. ROS parameter services and other standard UR/MoveIt interfaces also exist; this table covers the application control/diagnostic contract, not every interface of external packages.
 
@@ -176,7 +216,7 @@ Dashboard status fields and parameter synchronization are documented in the [ope
 The asynchronous `Startup` coordinator uses backend `configuration_ready` plus live readiness. Background `Configuration` checks the effective installation inputs in commissioning. It uses existing services and no additional command publisher. Desktop defaults to Live disarmed; Preview remains explicit. See [status contract](OPERATOR_STATUS.md#v4-authoritative-readiness-and-coordinator) and [optional historical evidence](COMMISSIONING.md#v4-engineering-record).
 
 
-## Initial Setup Wizard
+## Optional commissioning observations (formerly Initial Setup Wizard)
 
 The former mandatory wizard is now an optional engineering observation tool. It never opens automatically and historical results never grant readiness. `setup_checks.py`, `calibration_capture.py` and its read-only observer retain their observation/isolation rules. Physical tests still require explicit supervision.
 
@@ -186,7 +226,7 @@ The diagnostics recorder is a separate owned process that only runs bag recordin
 
 ## Controller-driven Preview calibration
 
-The [V5.1 observer](CALIBRATION_V51.md) has a dedicated ROS node/executor thread, separate from the GUI's single-callback polling. It reads tracking and independent Preview-isolation evidence, then feeds a pure bounded capture engine. A one-entry cumulative-result mailbox and bounded command queue separate ROS from Tk. It has no motion publisher, enable client or controller-switch client. Its only service clients read parameters and controller state, while capture is permitted. Closing the wizard joins the executor and destroys its node; reopening creates one fresh observer.
+The [V5.1 observer](CALIBRATION_V51.md) has a dedicated ROS node/executor thread, separate from the GUI's single-callback polling. It reads tracking and independent Preview-isolation evidence, then feeds a pure bounded capture engine. A one-entry cumulative-result mailbox and bounded command queue separate ROS from Tk. It has no motion publisher, enable client or controller-switch client. Its only service clients read parameters and controller state, while capture is permitted. Closing the observation panel joins the executor and destroys its node; reopening creates one fresh observer.
 
 This Preview capture condition permits A while the managed Preview backend has motion output disabled, no final command publisher, fresh inactive-controller readback, disarmed gate, false enable intent and healthy observations. The existing idle `SetupChecks.preview()` still requires A released; optical-loss and supervised Live checks remain separate. Capture data never establishes physical stopping performance or changes the production motion chain.
 

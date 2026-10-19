@@ -238,7 +238,7 @@ Changed sources: `ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop/{commissioning,star
 | `mock_startup_check.py` (GenericSystem, domain 148) | Passed |
 | `colcon build --packages-select ur_vr_teleop` | Built successfully |
 
-Not executed here: the C++ bridge/native-controller CTest suites (unaffected packages), the `calibration_ros_check.py` capture check, and all physical tests. Remaining hardware-only checks: real one-button startup with a live Servo/controller/driver, physical Servo-stale recovery, controller activation readback on the real controller manager, duplicate-backend/session behaviour, and the separate UR10e oscillation investigation.
+Not executed here: the C++ bridge/native-controller CTest suites (unaffected packages), the `calibration_ros_check.py` capture check, and all physical tests. At the time of this 2026-10-14 run, remaining hardware-only checks included real one-button startup with a live Servo/controller/driver, physical Servo-stale recovery, controller activation readback on the real controller manager, duplicate-backend/session behaviour, and the then-open UR10e oscillation investigation. The later Servo correction and operator-reported outcome are described above.
 
 ## V5.1 controller capture validation
 
@@ -339,4 +339,4 @@ V6.1 stabilization evidence and actual pass counts are recorded in [V6.1 report]
 1. Select Remote Control and verify the approved External Control `.urp` through **Settings → External Control program**.
 2. Press START TELEOP; confirm Dashboard check/load/play, reverse-interface connection, and no unintended motion on program start.
 3. Confirm Local Control and protective-stop refusals, STOP during startup, recovery after program interruption, and Dashboard Stop before ROS shutdown.
-4. Do not perform unsupervised motion while the previously reported wrist/arm oscillation remains unresolved. This work does not claim to fix that oscillation.
+4. The operator reports that the earlier wrist/arm oscillation disappeared after the Servo position-history correction; a separately documented post-fix physical measurement was not available in this audit. Treat any recurrence as a new observation requiring supervised investigation, not as proof that the correction failed or that all filtering was removed.

@@ -1,5 +1,7 @@
 # V6.1 — Stop-priority, shared tracking, identity and verification stabilization
 
+> **Update after this report:** the separate Servo position-history correction and the operator-reported disappearance of the wrist/arm oscillation are described in [Sway diagnostics](SWAY_DIAGNOSTICS.md) and [Commissioning](COMMISSIONING.md). The limitation recorded below reflects the state at the time of this report.
+
 Date: 2026-10-19
 
 ## Baseline analyzed
@@ -73,7 +75,7 @@ Use the existing supervised checklist in [Commissioning](COMMISSIONING.md#v6-har
 2. Driver failure with a healthy tracking bridge: verify the gripper continues only with valid tracking and fresh status.
 3. Close/Restart: verify fresh disarmed readback before Dashboard shutdown and no pendant program left running.
 4. Dashboard program stop/identity change while telemetry is displayed: verify RUNNING disappears within the verification window.
-5. The previously reported UR10e wrist/arm oscillation remains unresolved; this work does not claim to fix it.
+5. At the time of this report, the previously reported UR10e wrist/arm oscillation remained unresolved; this work did not claim to fix it. The later Servo correction and operator-reported outcome are documented separately, as noted above.
 
 ## Known limitations
 

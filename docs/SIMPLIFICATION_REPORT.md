@@ -1,6 +1,8 @@
 # Startup simplification and sway diagnostics — implementation report
 
-Implemented 2026-10-14. No physical motion was performed, and no hardware sway cause or improvement is claimed.
+Implemented 2026-10-14. No physical motion was performed, and no hardware sway cause or improvement is claimed by this report.
+
+> **Historical values.** Numeric saved overrides quoted below (for example 1.5 m/s and −40°) were read at the time of this report. The current committed profile is 0.5 m/s, 60 deg/s, 1.5 rad/s, −45° and Position mode; the effective runtime snapshot remains authoritative. See [Configuration](CONFIGURATION.md).
 
 ## Dependency map and removed requirements
 
@@ -36,7 +38,7 @@ Each timestamped recording contains the ROS bag, topic inventory, selected/manag
 
 Comparisons use bag receive time; source/header clocks are audited separately. Receive-time correlation includes transport/sampling and is not absolute actuator latency. Servo trajectories also have future horizons. Interpolation does not extrapolate or cross gaps over 100 ms. Stop/settling needs an observed transition and at least 0.5 s of sustained evidence. Frequency/reversal metrics alone do not identify a physical root cause.
 
-A read-only parameter query in production domain 43 returned `Node not found`. Therefore no current hardware runtime settings were verified. Existing selected configuration retains gain 500, lookahead 0.03 s and saved overrides of 1.5 m/s, 180 deg/s, 2 rad/s and −40° yaw; these are not presented as measured current robot settings.
+A read-only parameter query in production domain 43 returned `Node not found`. Therefore no current hardware runtime settings were verified. At the time, the selected configuration retained gain 500, lookahead 0.03 s and saved overrides of 1.5 m/s, 180 deg/s, 2 rad/s and −40° yaw; these were not presented as measured current robot settings.
 
 ## Synthetic analysis results
 

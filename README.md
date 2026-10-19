@@ -8,8 +8,8 @@ The current implementation supports **either one or two calibrated Lighthouse st
 
 ## Capabilities and status
 
-- Velocity mode (normal default): hand motion produces bounded Cartesian velocity; stationary hand motion produces zero demand.
-- Position mode: a clutch-relative pose target is followed with bounded Cartesian velocity.
+- Velocity mode (built-in/YAML default): hand motion produces bounded Cartesian velocity; stationary hand motion produces zero demand.
+- Position mode (committed saved override): a clutch-relative pose target is followed with bounded Cartesian velocity. Determine the actual session mode from effective runtime settings.
 - Configurable tool-tip rotation centre with disarmed pendant TCP import; see [tool-tip setup](docs/OPERATION.md#change-the-tool-tip--rotation-centre).
 - Translation and rotation mapping, pose filters, spatial deadbands, configurable speed and acceleration limits.
 - Hold A to command; release to stop. Tracking faults invalidate the clutch and require release and a new press.
@@ -17,7 +17,7 @@ The current implementation supports **either one or two calibrated Lighthouse st
 - A single-window operator dashboard with persistent tuning, session diagnostics, RViz, and an optional D405 wrist-camera display.
 - Driver-connected Preview and a separate hardware-free mock simulator. These exercise different control paths.
 
-**Review active settings before commissioning.** The committed YAML specifies 0.10 m/s linear speed; the committed saved operator profile overrides it to **1.5 m/s**. Angular speed is similarly overridden from 30 to **180 deg/s**, joint speed from 0.5 to **2 rad/s**, and alignment yaw from −90° to **−40°**. These are existing settings, not recommended starting limits. See [configuration precedence](docs/CONFIGURATION.md#configuration-precedence).
+**Review active settings before commissioning.** The committed YAML specifies 0.10 m/s linear speed; the committed saved operator profile overrides it to **0.5 m/s**. Angular speed is overridden from 30 to **60 deg/s**, joint speed from 0.5 to **1.5 rad/s**, and alignment yaw from −90° to **−45°**. The saved profile also selects Position while the built-in/YAML mode is Velocity. These are existing settings, not recommended starting limits. See [configuration precedence](docs/CONFIGURATION.md#configuration-precedence).
 
 ## System architecture
 
@@ -39,7 +39,7 @@ flowchart LR
     Safety[Robot state and controller supervision] --> Teleop
 ```
 
-The Cartesian command goes through Servo; the resulting joint trajectory returns through a timestamp relay and the gate before reaching the final controller. There is no direct `speedl`/`speedj` teleoperation path. [Architecture and ROS interfaces](docs/ARCHITECTURE.md) describes responsibilities and stop behavior.
+The Cartesian command goes through Servo; the resulting joint trajectory returns through a timestamp relay and the gate before reaching the final controller. There is no direct `speedl`/`speedj` teleoperation path. Valve Index tracking is shared, but the gripper has a separate authorization, pickup and ST3215 serial path that does not depend on A, Servo, arm motion readiness or External Control. Dashboard program management controls the approved External Control program; it does not send real-time Cartesian commands. [Architecture and ROS interfaces](docs/ARCHITECTURE.md) describes responsibilities and stop behavior.
 
 ## Requirements and installation
 
@@ -67,8 +67,8 @@ After installation, use the existing **UR10e Teleop** desktop shortcut, if insta
 ```
 
 1. The managed desktop starts **Live, motion disarmed**, with the motion controller inactive.
-2. On first launch, complete the Initial Setup Wizard with authorized supervision. Thereafter, press **START TELEOP** once with A released.
-3. If `dashboard.remote_program_control_enabled` is configured, the app checks Remote Control, the approved External Control `.urp`, loads/plays it when needed, and waits for confirmed Dashboard and driver readback. Otherwise follow the pendant instruction to run External Control. Then wait for **READY — PRESS A TO MOVE**.
+2. Press **START TELEOP** once with A released. No wizard opens automatically and no `verified_setup.json` or historical evidence file is required. A new or physically changed workcell still requires site commissioning and supervised validation before routine operation.
+3. Automatic Dashboard program start occurs only when `dashboard.remote_program_control_enabled` is configured, the approved `.urp` identity is set, and the robot is in Remote Control with the required readiness conditions. The app checks, loads/plays as needed, and waits for Dashboard running plus fresh driver readback. Otherwise start the approved External Control program through the pendant workflow. Then wait for **READY — PRESS A TO MOVE**.
 4. Hold A to move; release A to request a controlled stop.
 5. Press **STOP TELEOP** to clear arm enable intent. **STOP GRIPPER** is separate. **STOP ALL** withdraws both. Closing the app requests a Dashboard program stop before the UR driver is terminated. Engineering Preview and the old supervised workflow remain under explicit engineering controls; see [Operation](docs/OPERATION.md).
 

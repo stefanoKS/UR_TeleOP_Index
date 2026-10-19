@@ -1,6 +1,6 @@
 # Operator guide
 
-Complete [installation](INSTALLATION.md) and [commissioning](COMMISSIONING.md) before a physical session. Review the effective settings shown by the panel: saved preferences can override the YAML substantially. The current saved profile is not a low-speed commissioning profile.
+Complete [installation](INSTALLATION.md) and [commissioning](COMMISSIONING.md) before a physical session. Review the effective settings shown by the panel: saved preferences can override the YAML. The committed saved profile selects Position and higher limits than the YAML; it is not a commissioning recommendation, and the effective runtime values remain authoritative.
 
 ## Start the application
 
@@ -55,9 +55,11 @@ If tracking has been recalibrated or a station moved, repeat alignment verificat
 
 ## Choose a mode and settings
 
-**Velocity** is the default. Hand speed requests tool speed; stopping the hand removes velocity demand after filtering/deceleration. A press captures a fresh baseline, so the first sample cannot create a velocity spike.
+**Velocity** is the built-in and YAML default. Hand speed requests tool speed; stopping the hand removes velocity demand after filtering/deceleration. A press captures a fresh baseline, so the first sample cannot create a velocity spike.
 
-**Position** follows a relative target from where the hand and robot were when A was pressed. A displaced hand can continue requesting movement until the robot reaches that target. Tracking gain and measured-tool damping affect this mode.
+**Position** is selected by the committed saved operator profile. It follows a relative target from where the hand and robot were when A was pressed. A displaced hand can continue requesting movement until the robot reaches that target. Tracking gain and measured-tool damping affect this mode.
+
+The saved file does not prove what a currently running session uses. Check the effective mode shown by the panel or `/vr_real/operator_status`; a saved change applies only in the next managed-stack snapshot.
 
 Release A and disarm before switching modes or applying tuning. Mapping fields show a **VR:robot ratio**: 1.2 means 12 cm of hand travel requests 10 cm of robot travel. The persisted `translation_scale` is its inverse. Deadbands are displayed in millimetres/degrees; some time constants are displayed in milliseconds.
 
@@ -146,7 +148,7 @@ Open **Engineering / diagnostics → Advanced diagnostics / sway recording** and
 
 After rebuilding the native-controller and teleop packages, stop teleoperation and restart the managed stack to load the new Servo plugin. Starting a new panel alone does not reload it. Production now leaves Servo joint increments intact and uses native Ruckig for final joint smoothing; existing speed, acceleration, jerk and safety checks remain active. Saved tuning and alignment are unchanged.
 
-The correction addresses the measured-position feedback oscillation found in the October 15 recording. It has not established a hardware sway reduction. In supervised commissioning, begin at reviewed low limits, record a comparable slow movement and A-release stop, and compare Servo, final-reference and measured motion using the sway recorder. Do not infer robot stopping performance from offline tests.
+The correction removes the delayed position-history feedback term identified in the October 15 recording while preserving VR hand filtering, Cartesian bounds, collision/singularity handling and final Ruckig limits. Synthetic Servo regression results are documented in [Sway diagnostics](SWAY_DIAGNOSTICS.md). The operator reports that the earlier wrist/arm oscillation disappeared after this correction; a separately documented post-fix physical measurement was not available in this audit. In supervised commissioning, record a comparable slow movement and A-release stop and compare Servo, final-reference and measured motion. Do not infer physical stopping performance from synthetic tests.
 
 ## Change the tool tip / rotation centre
 
