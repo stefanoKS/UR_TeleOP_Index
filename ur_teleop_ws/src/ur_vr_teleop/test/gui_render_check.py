@@ -36,6 +36,7 @@ def run():
     def status():
         return dict(session_id=session[0],mode='DRY RUN — ROBOT OUTPUT DISABLED',
             armed=False,a_held=False,enable_requested=False,observations_healthy=True,
+            setup_feedback_fresh=True,robot_fault=False,measured_joint_velocity=[0.]*6,
             robot_ready=True,controller_ready=True,controller_state_fresh=True,servo_status_fresh=True,
             motion_ready=False,operator_heartbeat_fresh=True,configuration_ready=True,
             alignment_verified=backend.get_parameter('alignment_verified').value,
@@ -55,6 +56,25 @@ def run():
             time.sleep(.01)
     try:
         pump(1.5)
+        # Gripper panel uses measured feedback, temporary atomic persistence and async requests.
+        gui.open_gripper();pump(.2)
+        panel=gui.gripper_panel
+        gui.gripper_data=dict(connection='Connected',feedback_valid=True,feedback={'ticks':1650},
+                              identity={'servo_id':7},reason='Synthetic feedback')
+        gui.gripper_at=time.monotonic()
+        panel.capture('open_ticks');assert panel.fields['open_ticks'].get()=='1650'
+        panel.fields['closed_ticks'].set('1750');panel.fields['min_ticks'].set('1640')
+        panel.fields['max_ticks'].set('1760');panel.enabled.set(True)
+        panel.save();pump(.3)
+        assert json.loads((Path(temporary.name)/'gripper.json').read_text())['open_ticks']==1650
+        # An unanswered service never blocks Tk, even while feedback goes stale.
+        pending=Future();panel.ros_future=pending;pump(.4)
+        assert panel.window.winfo_exists() and 'unavailable' in panel.telemetry.get()
+        panel.ros_future=None
+        panel.canvas.yview_moveto(1);pump(.1)
+        x,y=panel.window.winfo_rootx(),panel.window.winfo_rooty()
+        ImageGrab.grab(bbox=(x,y,x+panel.window.winfo_width(),y+panel.window.winfo_height())).save('/tmp/ur_teleop_gripper_panel.png')
+        panel.close();assert panel.closed
         # Tool editing is disarmed, read-only toward UR and saved only in this temp profile.
         from ur_vr_teleop.tcp_panel import ToolTCPPanel
         from unittest.mock import patch

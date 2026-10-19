@@ -46,3 +46,7 @@ teleop:
 camera:
   enabled: true  # Optional capture; disconnect does not stop robot ROS nodes
   serial: "230322276078"  # Wrist D405, RGB + metric depth at 640x480 / 15 FPS
+
+# Optional independent process; follow remains disabled until gripper.json is calibrated.
+gripper:
+  process_enabled: true

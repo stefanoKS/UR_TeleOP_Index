@@ -160,3 +160,7 @@ Saving does not change an already-running session. A configured profile requires
 The editor saves `tool_tcp.json` beside the selected YAML, tied to its robot IP. Existing installations without this profile or a YAML `robot.tcp_offset` keep their original `tool0` behavior. A zero offset explicitly selects the flange point while retaining TCP consistency checks. Do not change the robot calibration file to represent a tool.
 
 The added tip link contains no physical tool geometry. Robot collision checks remain active, but an attached tool needs its own reviewed collision model; the TCP point alone does not describe its shape.
+
+## Optional gripper
+
+Open **Settings → Gripper Setup** to connect read-only, capture real encoder endpoints, review travel, and save. Normal trigger follow requires saved enable, START readiness and deliberate trigger pickup. A release stops only arm demand. STOP withdraws gripper target advancement and preserves holding torque; it does not guarantee a safe grasp. See [Gripper operation and supervised calibration](GRIPPER.md).

@@ -291,3 +291,7 @@ Executed with system Python 3.10 and the rebuilt Humble overlay. ROS checks used
 | `git diff --check` and changed-document local-link checks | Passed |
 
 The initial pytest invocation lacked the overlay and failed collection; sourcing the rebuilt overlay resolved it. The first offset mock-startup test used incomplete synthetic snapshot source metadata; the test fixture was corrected and rerun successfully. Unaffected C++ packages were not rebuilt or retested. Real-robot RTDE/TCP import, physical tool calibration, collision geometry and motion/stopping validation remain unperformed. No live TCP profile was created and existing operator settings were preserved.
+
+## Gripper regression and physical assessment
+
+The independent ST3215 package adds mock-worker, actual SDK/pseudo-terminal, ROS lifecycle and GUI calibration coverage. Follow [Gripper automated validation](GRIPPER.md#automated-validation) and its separate supervised physical sequence. Never point automated serial tests at a physical adapter.

@@ -168,3 +168,7 @@ ros2 launch ur_vr_sim_teleop simulation.launch.py --show-args
 Expected entry points: bridge `controller_bridge`, `servo_stamp_relay`; teleop `preview`, `commissioning`, `gui`, `desktop`; camera `d405_camera`, `d405_capture`. Run the [automated tests](COMMISSIONING.md#automated-validation) before operator commissioning. `--show-args` inspects launch arguments; it is not a live-stack test.
 
 A clean build validates compilation and packaging. It does not establish tracking calibration, robot network readiness, safe physical stopping, or a fresh-machine GUI installation. Continue with [Commissioning](COMMISSIONING.md).
+
+## Optional ST3215 SDK
+
+Build `ur_bus_servo_gripper` alongside `ur_vr_teleop`. The optional physical driver requires `python3-serial` and the pinned Waveshare `scservo_sdk.sms_sts` source archive. See the [gripper installation procedure](GRIPPER.md#install-and-identify); a missing device/SDK does not block the arm.

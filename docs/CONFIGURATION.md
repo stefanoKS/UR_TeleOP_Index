@@ -265,3 +265,7 @@ A version-1 `tool_tcp.json` beside the selected YAML overrides this key. Its fie
 The managed driver and Servo add the same fixed `tool0 → teleop_tcp` joint. Servo's semantic manipulator chain ends at this link, and teleop measures it. Cartesian limits/workspace checks therefore apply at the selected tip; native joint velocity/acceleration/jerk ownership is unchanged. Tool shape/payload are not inferred from the point.
 
 Configured TCP consistency uses output-only RTDE protocol 2 on robot port 30004 (`tcp_offset`, VECTOR6D). Reads run on the configuration worker using a new bounded connection (0.6 s total deadline) per check, avoiding old queued samples. Checks are scheduled at the existing 0.5 s configuration interval; results expire after 2 s. Difference tolerances are 10 µm translation and 10 µrad orientation. Mismatch/read failure blocks configuration readiness; this is not instantaneous detection. No input recipes, TCP-setting scripts, or motion commands are sent. Without a configured offset, automatic reads are disabled; the editor can still request a read while disarmed.
+
+## Gripper settings
+
+`gripper.process_enabled` in the selected YAML defaults true and controls only optional child startup (restart required). Adjacent `gripper.json` is a separate version-1 calibration, initially absent/disabled, with explicit endpoint/travel validation and atomic saving. It does not change arm operator preferences. See the [gripper parameter table](GRIPPER.md#settings-json-version-1).

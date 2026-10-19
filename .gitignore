@@ -28,3 +28,6 @@ engineering_record.json
 # Local installation verification; never distribute a preapproved setup.
 ur_teleop/config/verified_setup.json
 ur_teleop/config/verified_setup.previous-*.json
+
+# Per-mechanism gripper calibration is never a shipped safe-travel default.
+ur_teleop/config/gripper.json

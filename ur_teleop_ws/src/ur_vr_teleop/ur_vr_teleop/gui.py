@@ -74,12 +74,36 @@ class OperatorGUI:
         self.native_reference = {}
         self.native_reference_at = -float('inf')
         self.last_status_at = self.heartbeat_at = -float('inf')
+        self.gripper_data, self.gripper_at, self.gripper_panel = {}, -float('inf'), None
         self.camera_at, self.camera_text, self.camera_window = -float('inf'), 'Camera not connected', None
         self.fields, self.field_rows, self.field_widgets, self._loading_fields = {}, {}, {}, False
         self.root = tk.Tk(); self.root.title('UR10e Teleoperation Dashboard'); self.root.geometry('1440x900'); self.root.minsize(1280, 700)
         self.root.configure(bg=COLORS['bg']); self._style(); self._build(); self._interfaces()
         self.process_worker = ManagerWorker(manager) if manager else None
         self.root.protocol('WM_DELETE_WINDOW', self.close); self.root.after(20, self.poll)
+
+    def open_gripper(self):
+        from .gripper_panel import GripperPanel
+        if self.gripper_panel is None or self.gripper_panel.closed:
+            self.gripper_panel = GripperPanel(self)
+        else:
+            self.gripper_panel.window.lift()
+
+    def on_gripper(self, msg):
+        try:
+            data = json.loads(msg.data)
+            if not isinstance(data, dict) or len(msg.data) > 20000:
+                return
+            for key in ('feedback', 'identity'):
+                if key in data and not isinstance(data[key], dict):
+                    return
+            fraction = data.get('normalized_trigger')
+            if fraction is not None and (type(fraction) not in (float, int) or not math.isfinite(fraction)):
+                return
+            if isinstance(data, dict):
+                self.gripper_data, self.gripper_at = data, time.monotonic()
+        except (ValueError, TypeError):
+            pass
 
     def open_tool_tcp(self):
         from .tcp_panel import ToolTCPPanel
@@ -103,6 +127,7 @@ class OperatorGUI:
     def _build(self):
         menu = tk.Menu(self.root)
         settings_menu = tk.Menu(menu, tearoff=False)
+        settings_menu.add_command(label='Gripper Setup', command=self.open_gripper)
         settings_menu.add_command(label='Tool tip / rotation centre', command=self.open_tool_tcp)
         settings_menu.add_command(label='Advanced tuning', command=lambda: (self.advanced_open.set(True), self.toggle_advanced()))
         menu.add_cascade(label='Settings', menu=settings_menu)
@@ -154,9 +179,14 @@ class OperatorGUI:
             value=tk.StringVar(value='Waiting')
             widget=ttk.Label(ready,textvariable=value,style='Card.TLabel',wraplength=270)
             widget.pack(anchor='w',pady=5);self.readiness[key]=(value,widget)
+        self.gripper_card=gripper=self.card(outer,'GRIPPER'); gripper.pack(fill='x',pady=(0,8))
+        self.gripper_text=tk.StringVar(value='Optional gripper disconnected')
+        ttk.Label(gripper,textvariable=self.gripper_text,style='Muted.TLabel',wraplength=270).pack(anchor='w')
+        ttk.Button(gripper,text='Gripper Setup',command=self.open_gripper).pack(anchor='w')
         self.engineering_open=tk.BooleanVar(value=False)
-        ttk.Checkbutton(outer,text='Engineering / diagnostics',variable=self.engineering_open,
-                        command=self.toggle_engineering).pack(anchor='w')
+        self.engineering_toggle=ttk.Checkbutton(outer,text='Engineering / diagnostics',variable=self.engineering_open,
+                        command=self.toggle_engineering)
+        self.engineering_toggle.pack(anchor='w')
         self.engineering_panel=self.card(outer,'Engineering tools')
         ttk.Button(self.engineering_panel,text='Advanced diagnostics / sway recording',command=self.show_history).pack(fill='x')
         self.record_status = tk.StringVar(value='Recording idle — independent of motion enable')
@@ -192,8 +222,12 @@ class OperatorGUI:
             self.recorder.stop()
 
     def toggle_engineering(self):
-        if self.engineering_open.get():self.engineering_panel.pack(fill='x',pady=4)
-        else:self.engineering_panel.pack_forget()
+        if self.engineering_open.get():
+            self.gripper_card.pack_forget()
+            self.engineering_panel.pack(fill='x',pady=4)
+        else:
+            self.engineering_panel.pack_forget()
+            self.gripper_card.pack(fill='x',pady=(0,8),before=self.engineering_toggle)
 
     def monitoring(self,parent):
         outer=ttk.Frame(parent,style='App.TFrame'); camera=self.card(outer,'Camera / visualization'); camera.pack(fill='x',pady=(0,8))
@@ -270,6 +304,7 @@ class OperatorGUI:
 
     def _interfaces(self):
         from trajectory_msgs.msg import JointTrajectory
+        self.node.create_subscription(String, '/gripper/status', self.on_gripper, 1)
         self.node.create_subscription(JointTrajectory, '/scaled_joint_trajectory_controller/smoothed_command', self.on_native_reference, 1)
         self.clients={key:self.node.create_client(Trigger,name) for key,name in {'arm':'/vr_real/arm','disarm':'/vr_real/disarm','servo':'/vr_real/servo_node/start_servo'}.items()}; self.enable_client=self.node.create_client(SetBool,'/vr_real/set_enabled'); self.switch_client=self.node.create_client(SwitchController,'/controller_manager/switch_controller'); self.settings=self.node.create_client(SetParametersAtomically,'/vr_real/teleop/set_parameters_atomically'); self.heartbeat=self.node.create_publisher(Bool,'/vr_real/operator_present',1); self.node.create_subscription(String,'/vr_real/operator_status',self.on_status,1); self.node.create_subscription(String,'/wrist_camera/status',self.on_camera_status,1)
 
@@ -508,6 +543,9 @@ class OperatorGUI:
         # A canceled Future cannot cancel a request already executing at the server.
         # Withhold heartbeat until it retires, then send disarm again.
         self.heartbeat_allowed=False
+        if getattr(self, 'gripper_panel', None) is not None and not self.gripper_panel.closed:
+            self.gripper_panel.authorized.set(False)
+            self.gripper_panel.publisher.publish(Bool(data=False))
         self.heartbeat.publish(Bool(data=False))
         self.retiring_startup=self.startup_request is not None
         self.call('disarm')
@@ -832,6 +870,11 @@ class OperatorGUI:
         self.poll_startup(now)
         if self.setup_wizard is not None:
             self.setup_wizard.poll()
+        gd = self.gripper_data if now-self.gripper_at < .5 else {}
+        gf = gd.get('feedback', {}) if gd.get('feedback_valid') else {}
+        fraction = gd.get('normalized_trigger')
+        percent = f'{fraction*100:.0f}%' if isinstance(fraction, (float, int)) else '—'
+        self.gripper_text.set(f"{gd.get('connection', 'Disconnected')} · ST3215 · ID {gd.get('identity', {}).get('servo_id', '—')}\nTrigger / requested: {percent} · Actual: {gf.get('ticks', '—')} ticks\nTarget: {gd.get('commanded_ticks', '—')} · {gd.get('status', 'Unavailable')}\n{str(gd.get('reason', ''))[:160]}")
         self.camera_status.set(self.camera_text if now-self.camera_at<4 else 'D405 unavailable / no recent status (teleop unaffected)')
         stale,d=self.stale(),self.last_status
         self.update_dashboard(stale,d)
@@ -870,6 +913,7 @@ class OperatorGUI:
                 future.cancel();client.remove_pending_request(future)
             if getattr(self,'process_worker',None):self.process_worker.close()
             if hasattr(self,'request_meta'):self.cancel_requests()
+            if getattr(self,'gripper_panel',None) is not None:self.gripper_panel.close()
             if getattr(self,'camera_window',None) is not None:self.camera_window.close()
             if rclpy.ok():self.heartbeat.publish(Bool(data=False))
         finally:self.root.destroy()

@@ -145,3 +145,7 @@ Dashboard status fields and parameter synchronization are documented in the [ope
 [V4 implementation, validation, screenshots and rollback](docs/V4_STARTUP_REPORT.md).
 
 [Optional commissioning observations and historical setup records](docs/INITIAL_SETUP.md).
+
+## Optional rack gripper
+
+A separate single-ST3215 subsystem maps the Index analog trigger to saved OPEN/CLOSED encoder endpoints. A remains the arm clutch. Start with [Gripper setup, SDK installation and validation](docs/GRIPPER.md); the unconfigured gripper is disabled and does not block arm-only operation.

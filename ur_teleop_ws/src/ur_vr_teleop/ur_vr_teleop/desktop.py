@@ -170,6 +170,9 @@ class ProcessManager:
                         'launch_rviz:=false', 'engineering_session:='+str(getattr(self, 'engineering_session', False)).lower()],
             'rviz': self.rviz_command(),
         }
+        if settings.get('gripper', {}).get('process_enabled', True):
+            commands['gripper'] = ['ros2', 'run', 'ur_bus_servo_gripper', 'gripper', '--ros-args',
+                '-p', 'config_file:='+str(self.config.parent/'gripper.json')]
         camera = settings.get('camera', {})
         if camera.get('enabled', True):
             commands['camera'] = ['ros2', 'run', 'ur_d405_camera', 'd405_camera', '--ros-args',
@@ -315,7 +318,7 @@ class ProcessManager:
     def poll(self):
         self.scan_owned()
         if not self.stopping:
-            failed = [name for name, p in self.children.items() if name not in ('rviz', 'camera') and p.poll() is not None]
+            failed = [name for name, p in self.children.items() if name not in ('rviz', 'camera', 'gripper') and p.poll() is not None]
             if failed:
                 reasons = ', '.join(f'{name}(exit {self.children[name].returncode})' for name in failed)
                 self.message = ('Process exited: ' + reasons + '. Stack stopped; logs: ' + str(self.directory)

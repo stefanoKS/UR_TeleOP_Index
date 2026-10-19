@@ -1,0 +1,312 @@
+from dataclasses import replace
+import json
+import math
+import threading
+import time
+import pytest
+from ur_bus_servo_gripper.gripper_config import Config, load, save
+from ur_bus_servo_gripper.gripper_mapping import normalize, target_ticks, Follow
+from ur_bus_servo_gripper.gripper_worker import Worker
+from ur_bus_servo_gripper.gripper_calibration import jog_target, stationary_disarmed
+from ur_bus_servo_gripper.st3215_driver import Feedback, Driver, checked, signed
+
+
+@pytest.fixture
+def config():
+    return Config(enabled=True, servo_id=7, open_ticks=1000, closed_ticks=2300,
+                  min_ticks=990, max_ticks=2310, deadzone=0.)
+
+
+@pytest.mark.parametrize('fraction,ticks', [(0,1000),(.25,1325),(.5,1650),(.75,1975),(1,2300)])
+def test_mapping(config, fraction, ticks):
+    assert target_ticks(normalize(fraction, config), config) == ticks
+    reverse = replace(config, open_ticks=2300, closed_ticks=1000)
+    assert target_ticks(fraction, reverse) == 3300-ticks
+
+
+@pytest.mark.parametrize('values', [dict(open_ticks=1.1), dict(closed_ticks=4096),
+    dict(min_ticks=-1), dict(open_ticks=2300), dict(servo_id=-1), dict(speed=0),
+    dict(acceleration=0), dict(trigger_min=1), dict(trigger_max=float('nan')),
+    dict(rate_ticks_s=0), dict(open_ticks=True), dict(invert=1)])
+def test_config_rejects(config, values):
+    with pytest.raises(ValueError): replace(config, **values).validate()
+
+
+def test_normalization_and_noise(config):
+    c = replace(config, trigger_min=.12, trigger_max=.92, deadzone=.02)
+    assert normalize(.12, c) == normalize(.125, c) == 0
+    assert normalize(.92, c) == 1
+    assert normalize(.52, c) == pytest.approx(.5)
+    assert normalize(.12, replace(c, invert=True)) == 1
+    with pytest.raises(ValueError): normalize(float('nan'), c)
+    with pytest.raises(ValueError): normalize(2, c)
+    assert target_ticks(-1, c) == c.open_ticks
+    assert target_ticks(2, c) == c.closed_ticks
+
+
+def test_atomic_save(tmp_path, config, monkeypatch):
+    path=tmp_path/'gripper.json'
+    save(path, config)
+    assert load(path) == config
+    import ur_bus_servo_gripper.gripper_config as module
+    monkeypatch.setattr(module.os, 'replace', lambda *args: (_ for _ in ()).throw(OSError('disk')))
+    with pytest.raises(OSError): save(path, replace(config, speed=20))
+    assert load(path) == config
+    assert len(list(tmp_path.iterdir())) == 1
+
+
+def test_pickup_and_recovery(config):
+    f=Follow(config)
+    for _ in range(20): assert f.step(.5,1650,.04) is None
+    assert not f.active
+    f.step(.6,1650,.04)
+    f.step(.5,1650,.04)
+    assert f.active
+    assert f.step(1,1650,.04) == 1654
+    f.reset()
+    assert f.step(0,1650,.04) is None
+    assert f.step(.5,1650,.04) is None
+    assert f.active
+    assert f.step(1,1650,100) == 1654  # never catch up after a scheduling gap
+    for _ in range(100): f.step(1,1650,.04)
+    assert f.last_sent <= 1670
+
+
+def test_threshold_and_jog(config):
+    f=Follow(config); f.step(.6,1650,.04); f.step(.5,1650,.04)
+    assert f.step(.5001,1650,.04) is None
+    assert jog_target(2309,True,config) == 2310
+    assert jog_target(1000,True,replace(config,open_ticks=2300,closed_ticks=1000)) == 995
+
+
+class FakeDriver:
+    writes=[]
+    fail=False
+    def __init__(self,config):
+        self.config=config; self.servo_id=7; self.identity={'servo_id':7}; self.closed=False
+    def connect(self,cancelled): return self.read()
+    def read(self):
+        if self.fail: raise IOError('feedback timeout')
+        return Feedback(1650,0,0,12.,25,0,0,False,time.monotonic())
+    def write(self,ticks,calibration=False): self.writes.append(ticks)
+    def close(self): self.closed=True
+
+
+def backend(enabled=False):
+    return dict(session_id='one', armed=False,enable_requested=enabled,a_held=False,
+                setup_feedback_fresh=True,robot_fault=False,measured_joint_velocity=[0.]*6,
+                motion_ready=True,motion_output_enabled=True,tracking_valid=True)
+
+
+@pytest.fixture
+def worker(tmp_path,config,monkeypatch):
+    save(tmp_path/'g.json',config)
+    FakeDriver.writes=[];FakeDriver.fail=False
+    worker=Worker(tmp_path/'g.json',FakeDriver)
+    now=[100.]
+    monkeypatch.setattr(time,'monotonic',lambda:now[0])
+    worker.last_time=now[0]
+    worker.update('backend',backend())
+    worker.request('connect');worker.step()
+    worker.now=now
+    return worker
+
+
+def drive(w,raw=.5,enabled=True,pose=True,optical=True):
+    w.now[0]+=.04
+    for key,value in dict(backend=backend(enabled),heartbeat=enabled,pose=pose,optical=optical,joy=raw).items():
+        w.update(key,value)
+    w.step()
+
+
+def engage(w):
+    drive(w,.5);drive(w,.6);drive(w,.5)
+    assert w.follow.active
+
+
+def test_start_connect_save_never_moves(worker, tmp_path,config):
+    assert not FakeDriver.writes
+    save(tmp_path/'other.json',config)
+    drive(worker,.5)
+    assert not FakeDriver.writes
+
+
+def test_follow_a_independent_stop_and_tracking_loss(worker):
+    engage(worker);drive(worker,1)
+    assert FakeDriver.writes[-1]==1654
+    # A released is already false in backend; follow remains active.
+    drive(worker,1); assert len(FakeDriver.writes)==2
+    count=len(FakeDriver.writes)
+    drive(worker,0,pose=False)
+    assert len(FakeDriver.writes)==count
+    drive(worker,0); assert not worker.follow.active
+    drive(worker,.5);drive(worker,1)
+    assert FakeDriver.writes[-1]==1654
+    count=len(FakeDriver.writes)
+    drive(worker,0,enabled=False)
+    drive(worker,0,enabled=False)
+    assert len(FakeDriver.writes)==count
+
+
+def test_transient_loss_between_worker_ticks_resets(worker):
+    engage(worker)
+    worker.update('pose',False);worker.update('pose',True)
+    drive(worker,1)
+    assert not worker.follow.active
+    assert not FakeDriver.writes
+
+
+def test_stale_input_holds(worker):
+    engage(worker);drive(worker,1)
+    count=len(FakeDriver.writes)
+    worker.now[0]+=.3;worker.step()
+    assert not worker.follow.active
+    assert len(FakeDriver.writes)==count
+
+
+def test_reconnect_does_not_replay(worker):
+    engage(worker);drive(worker,1)
+    drive(worker,0,enabled=False)
+    worker.request('connect');worker.step()
+    count=len(FakeDriver.writes)
+    drive(worker,0)
+    assert len(FakeDriver.writes)==count
+    assert not worker.follow.active
+
+
+def test_failed_feedback_blocks_writes(worker):
+    engage(worker)
+    worker.driver.fail=True
+    with pytest.raises(IOError):drive(worker,1)
+    assert not FakeDriver.writes
+
+
+def test_calibration_authorization(worker):
+    worker.request('jog_open')
+    with pytest.raises(ValueError):worker.step()
+    worker.update('calibration',True)
+    worker.request('jog_close');worker.step()
+    for _ in range(10):
+        worker.now[0]+=.04
+        worker.update('backend',backend());worker.update('calibration',True)
+        worker.step()
+    assert FakeDriver.writes[-1] == 1655
+    count=len(FakeDriver.writes)
+    worker.update('calibration',False);worker.step()
+    assert len(FakeDriver.writes)==count
+    assert not stationary_disarmed(dict(backend(), measured_joint_velocity=None))
+
+
+def test_stall_does_not_claim_grasp(worker):
+    engage(worker)
+    with pytest.raises(IOError,match='object/obstruction/jam unknown'):
+        for _ in range(80): drive(worker,1)
+    assert max(FakeDriver.writes)<=1670
+
+
+def test_bounded_mailbox(worker):
+    assert worker.request('read')
+    assert not worker.request('open')
+
+
+@pytest.mark.parametrize('result', [(1,-6,0),(1,0,32)])
+def test_sdk_errors(result):
+    with pytest.raises(IOError): checked(result)
+
+
+def test_feedback_decodes_real_registers(config):
+    class Packet:
+        def readTxRx(self,*args):
+            assert args==(7,56,15)
+            return [0x72,6,5,0x80,2,4,120,30,0,0,1,0,0,10,0],0,0
+    d=Driver(config,sdk=object());d.servo_id=7;d.packet=Packet()
+    fb=d.read()
+    assert (fb.ticks,fb.speed_raw,fb.load_raw,fb.voltage_v,fb.temperature_c,fb.current_raw)==(1650,-5,-2,12.,30,10)
+    assert fb.moving
+
+
+def test_missing_serial(config):
+    d=Driver(replace(config,port='/dev/nonexistent-teleop-test'))
+    with pytest.raises(OSError): d.connect()
+
+
+def test_calibration_trigger_requires_pickup_and_retires_on_motion(worker):
+    drive(worker,.5,enabled=False)
+    worker.update('calibration',True)
+    worker.request('follow');worker.step()
+    # Keep all disarmed observation streams fresh; pickup itself never writes.
+    def sample(raw):
+        worker.update('calibration',True)
+        drive(worker,raw,enabled=False)
+    sample(.6);sample(.5)
+    assert worker.follow.active
+    sample(1.);sample(1.)
+    assert FakeDriver.writes[-1] <= 1652  # 25 ticks/s at 25 Hz, threshold two
+    moving=backend();moving['measured_joint_velocity']=[.1]*6
+    worker.update('backend',moving)
+    worker.update('backend',backend())
+    sample(1.)
+    assert not worker.calibration_follow
+    assert not worker.follow.active
+
+
+def test_motor_overtemperature_and_status_stop_before_write(worker):
+    engage(worker)
+    worker.driver.read=lambda: Feedback(1650,0,0,12.,70,0,0,False,time.monotonic())
+    with pytest.raises(IOError,match='temperature'):drive(worker,1.)
+    assert not FakeDriver.writes
+
+
+def test_withdrawal_during_read_prevents_write(worker):
+    engage(worker)
+    original=worker.driver.read
+    def read():
+        worker.update('heartbeat',False)
+        return original()
+    worker.driver.read=read
+    drive(worker,1.)
+    assert not FakeDriver.writes
+
+
+def test_worker_fault_and_join_remain_responsive(tmp_path,config):
+    save(tmp_path/'g.json',config)
+    class FailedDriver(FakeDriver):
+        def connect(self,cancelled):
+            time.sleep(.05)
+            raise IOError('serial timeout')
+    w=Worker(tmp_path/'g.json',FailedDriver)
+    w.update('backend',backend());w.request('connect');w.start()
+    try:
+        deadline=time.monotonic()+1
+        while time.monotonic()<deadline and w.snapshot().get('status')!='Fault':
+            started=time.monotonic();w.snapshot()
+            assert time.monotonic()-started<.02
+            time.sleep(.005)
+        assert w.snapshot()['connection']=='Fault'
+        assert not w.snapshot()['feedback_valid']
+    finally:w.close()
+    assert not w.thread.is_alive()
+
+
+def test_external_encoder_displacement_never_creates_target_jump(config):
+    f=Follow(config);f.step(.6,1650,.04);f.step(.5,1650,.04)
+    with pytest.raises(ValueError,match='Encoder moved'):f.step(1.,1800,.04)
+    assert f.last_sent==1650
+
+
+def test_real_a_press_release_does_not_retire_gripper_follow(worker):
+    engage(worker)
+    worker.update('backend',dict(backend(True),a_held=True,armed=True))
+    worker.step()
+    assert worker.follow.active
+    worker.update('backend',dict(backend(True),a_held=False,armed=True))
+    worker.step()
+    assert worker.follow.active
+    drive(worker,1.)
+    assert FakeDriver.writes[-1]==1654
+
+
+def test_feedback_outside_reviewed_travel_faults_before_pickup(config):
+    f=Follow(config)
+    with pytest.raises(ValueError,match='outside reviewed travel'):f.step(.5,2500,.04)
+    assert not f.active and f.last_sent is None

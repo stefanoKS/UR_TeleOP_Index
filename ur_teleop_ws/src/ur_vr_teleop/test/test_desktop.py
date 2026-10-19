@@ -28,14 +28,14 @@ class ToyManager(ProcessManager):
         return [sys.executable, '-c', 'import time; time.sleep(60)']
 
 
-@pytest.mark.parametrize('optional', ['rviz', 'camera'])
+@pytest.mark.parametrize('optional', ['rviz', 'camera', 'gripper'])
 def test_rviz_can_close_and_reopen_without_stopping_stack(tmp_path, optional):
     manager = ToyManager(tmp_path/'unused', root=tmp_path, conflict_check=lambda: [])
     try:
         manager.start()
         manager.open_rviz()
-        if optional == 'camera':
-            manager.spawn('camera', [sys.executable, '-c', 'import time; time.sleep(60)'])
+        if optional in ('camera', 'gripper'):
+            manager.spawn(optional, [sys.executable, '-c', 'import time; time.sleep(60)'])
         old = manager.children[optional]
         old.terminate()
         old.wait(timeout=3)
@@ -201,6 +201,8 @@ def test_generated_driver_command_stays_inactive(tmp_path):
     assert 'activate_joint_controller:=false' in commands['driver']
     assert 'headless_mode:=false' in commands['driver']
     assert 'motion_output_enabled:=true' in commands['teleop']
+    assert commands['gripper'][:4] == ['ros2', 'run', 'ur_bus_servo_gripper', 'gripper']
+    assert 'config_file:='+str(m.config.parent/'gripper.json') in commands['gripper']
     assert any(arg.startswith('description_file:/') or arg.startswith('description_file:=/') for arg in commands['driver'])
     controller_file = next(arg.split(':=', 1)[1] for arg in commands['driver'] if arg.startswith('controllers_file:='))
     data = yaml.safe_load(Path(controller_file).read_text())
