@@ -38,6 +38,19 @@ A one-shot echo can wait indefinitely if its topic is absent; use Ctrl+C. A high
 
 Software Disarm requests normal downstream stopping. Use the pendant/physical emergency stop for an emergency; neither a status flag nor zero Twist establishes physical standstill.
 
+## Gripper and Dashboard program start
+
+| Symptom | Likely cause | Diagnostic command | Corrective action |
+|---|---|---|---|
+| ENABLE GRIPPER rejected | Profile absent/disabled/uncalibrated, duplicate node/owner | `ros2 topic echo /gripper/status --once` | Connect read-only in Gripper Setup, review distinct endpoints/travel, save, reconnect, then enable. |
+| Gripper says "session not enabled" | Latched enable was not requested or was withdrawn | `ros2 topic echo /gripper/status --once` | Press ENABLE GRIPPER. A, START TELEOP, Servo and External Control are not required. |
+| Gripper connected but never follows | Pickup not completed, stale Joy/pose/optical, no GUI heartbeat | `ros2 topic echo /gripper/status --once` while moving the trigger | Move the trigger >=5% and match actual closure; restore tracking; check the GUI is open. |
+| Serial adapter not found / permission denied / busy | USB, udev/dialout, or another serial owner | `ls -l /dev/serial/by-id/ /dev/ttyUSB*` | Fix access through the workstation administrator. Do not globally relax permissions or kill an unknown owner. |
+| START TELEOP says Local Control | Pendant not in Remote Control | `ros2 service call /dashboard_client/is_in_remote_control ur_dashboard_msgs/srv/IsInRemoteControl` | Select Remote Control on the pendant. The app never changes it. |
+| Dashboard services unavailable | Driver/dashboard_client not running or wrong network | `ros2 service list` (filter for `dashboard_client`) | Check the managed driver and robot network; press START TELEOP after recovery. |
+| Program Play acknowledged but not running | Program rejected/paused or wrong identity | `ros2 service call /dashboard_client/program_running ur_dashboard_msgs/srv/IsProgramRunning` | Inspect the pendant and driver log. The app does not retry Play automatically. |
+| Close reports unconfirmed program stop | Driver already gone or Dashboard readback timed out | Driver/teleop log and pendant | Expect bounded termination was still applied. A pendant socket-disconnect popup may occur; investigate the driver before the next session. |
+
 ## Settings and motion
 
 | Symptom | Likely cause | Diagnostic command | Corrective action |

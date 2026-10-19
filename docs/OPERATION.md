@@ -31,8 +31,10 @@ viewer in a separate window; it is not collision sensing.
 | Control or display | Meaning |
 |---|---|
 | START TELEOP | Asynchronously prepare the controller, start or recover Servo as needed, request enable, then wait for actual backend arming; a prominent banner names the current stage and blocker |
-| STOP TELEOP | Interrupt startup, clear enable intent, and request a software stop; always available |
-| Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, individual preparation, optional observations and read-only sway recording |
+| STOP TELEOP | Interrupt arm startup, clear enable intent, and request a software stop; does not stop an independently enabled gripper |
+| ENABLE GRIPPER / STOP GRIPPER | Latched gripper-session follow permission; works before START TELEOP, with A released or held, and without the UR driver or External Control |
+| STOP ALL | Withdraws both arm and gripper motion permission; still a software stop, not an emergency stop |
+| Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, External Control program identity, individual preparation, optional observations and read-only sway recording |
 | Open RViz / D405 camera | Optional visualization; camera is not collision protection |
 | Apply changes | Submit the edited named settings to the running backend while disarmed with A released |
 | Apply + save | Save accepted persistent tuning for next launch; a changed joint speed still requires Restart ROS |
@@ -64,8 +66,8 @@ A saved joint-speed change requires restarting the ROS stack because the final n
 ## Authorized live session
 
 1. Open the application. It starts the managed Live stack disarmed.
-2. Press **START TELEOP** once, with A released. Preparation waits for real robot, tracking, joints/TF and controller ownership status.
-3. If instructed, start the External Control program on the pendant. The application does not press Play, change robot mode, or release protective stops.
+2. Press **START TELEOP** once, with A released. When the approved External Control `.urp` is configured, the app checks Remote Control, safety and robot mode, verifies/loads the program, presses Dashboard Play, and requires Dashboard program-running plus fresh driver readback before controller preparation. Otherwise it waits for the pendant-run program.
+3. The app never changes Remote Control mode, resets protective/emergency stops, releases brakes, powers the robot, or executes arbitrary URScript. A Local Control result displays the exact pendant instruction.
 4. Wait for **READY — PRESS A TO MOVE**, derived from backend `armed` and `motion_ready`.
 5. Hold A to move; release A to request a controlled stop.
 6. Press **STOP TELEOP** to clear enable intent. A new START is required afterward.
@@ -94,7 +96,7 @@ Losing one station should not stop a valid remaining pose. If it does, inspect p
 
 ## Shutdown and evidence
 
-Release A, disarm, and wait for measured motion to stop. Close the desktop to stop its owned stack; Engineering **Stop ROS** is also available. Follow the pendant procedure for ending External Control. The desktop stops only processes it owns; unrelated ROS processes are not automatically killed.
+Release A, disarm, and wait for measured motion to stop. Closing the desktop or Engineering **Stop ROS** first retires further Start/Enable requests, withdraws arm and gripper permission, requests Dashboard Stop while the UR services are still alive, and requires program-running readback before terminating the managed driver. If that confirmation is unavailable, the app reports the bounded fallback and warns that a pendant socket-disconnect popup may still occur. The desktop stops only processes it owns; unrelated ROS processes are not automatically killed. **Restart ROS** uses the same ordered stop.
 
 Session material is under `ur_teleop/logs/`: component logs, `commands.json`, `effective_config.yaml`, and `effective_settings.log`. These record startup settings; accepted runtime changes may be newer. Capture current panel/status and ROS parameter values when diagnosing a session. Logs and recordings are ignored by Git.
 
@@ -163,4 +165,8 @@ The added tip link contains no physical tool geometry. Robot collision checks re
 
 ## Optional gripper
 
-Open **Settings → Gripper Setup** to connect read-only, capture real encoder endpoints, review travel, and save. Normal trigger follow requires saved enable, START readiness and deliberate trigger pickup. A release stops only arm demand. STOP withdraws gripper target advancement and preserves holding torque; it does not guarantee a safe grasp. See [Gripper operation and supervised calibration](GRIPPER.md).
+Open **Settings → Gripper Setup** to connect read-only, capture real encoder endpoints, review travel, and save. Connection, diagnostics and saving work without a robot connection. Normal trigger follow requires **ENABLE GRIPPER**, a saved calibrated profile, the gripper heartbeat and deliberate trigger pickup; it does not require START TELEOP, A, Servo, the native controller or External Control. A release stops only arm demand. STOP GRIPPER withdraws target advancement and preserves holding torque; it does not guarantee a safe grasp. STOP ALL withdraws both subsystems. See [Gripper operation and supervised calibration](GRIPPER.md).
+
+### External Control program identity
+
+Use **Settings → External Control program** (or the Engineering button) to enter and verify the approved `.urp` and enable automatic Dashboard start. The override is saved atomically beside `real_teleop.yaml`. Verify that Dashboard reports the same loaded program before enabling automatic start. This panel never loads an unrelated program or commands motion.

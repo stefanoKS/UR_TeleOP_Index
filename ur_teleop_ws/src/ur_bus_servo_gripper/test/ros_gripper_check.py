@@ -8,7 +8,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool,String
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 from ur_bus_servo_gripper.gripper_node import GripperNode, MetadataExecutor
 from ur_bus_servo_gripper.gripper_worker import Worker
 from ur_bus_servo_gripper.gripper_config import Config,save
@@ -35,18 +35,21 @@ def run():
         ex=MetadataExecutor();ex.add_node(node);ex.add_node(fixture)
         pubs={key:fixture.create_publisher(typ,topic,1) for key,typ,topic in [
             ('joy',Joy,'/vr/controller/joy'),('pose',Bool,'/vr/controller/pose_fresh'),
-            ('optical',Bool,'/vr/controller/optical_fresh'),('heartbeat',Bool,'/vr_real/operator_present'),
-            ('backend',String,'/vr_real/operator_status')]}
+            ('optical',Bool,'/vr/controller/optical_fresh'),
+            ('heartbeat',Bool,'/gripper/operator_present')]}
+        enable=fixture.create_client(SetBool,'/gripper/set_enabled')
         state=dict(raw=.5,enabled=False,valid=True,stale=False)
         latest={}
         fixture.create_subscription(String,'/gripper/status',lambda msg:latest.update(json.loads(msg.data)),1)
+        def set_enabled(value):
+            deadline=time.monotonic()+2
+            while not enable.service_is_ready() and time.monotonic()<deadline:ex.spin_once(timeout_sec=.01)
+            future=enable.call_async(SetBool.Request(data=value))
+            while not future.done() and time.monotonic()<deadline:ex.spin_once(timeout_sec=.01)
+            assert future.done() and future.result().success, latest
         def publish():
             pubs['pose'].publish(Bool(data=state['valid']));pubs['optical'].publish(Bool(data=state['valid']))
-            pubs['heartbeat'].publish(Bool(data=state['enabled']))
-            backend=dict(session_id='fixture',armed=False,enable_requested=state['enabled'],a_held=False,
-                         setup_feedback_fresh=True,robot_fault=False,measured_joint_velocity=[0.]*6,
-                         motion_ready=True,motion_output_enabled=True,tracking_valid=state['valid'])
-            pubs['backend'].publish(String(data=json.dumps(backend)))
+            pubs['heartbeat'].publish(Bool(data=True))
             msg=Joy();msg.header.stamp=fixture.get_clock().now().to_msg()
             if state['stale']:msg.header.stamp.sec-=1
             msg.axes=[0.,state['raw'] if state['valid'] else 0.];msg.buttons=[0]*16
@@ -59,7 +62,7 @@ def run():
             pump(.6)
             assert latest.get('connected'),latest
             assert not FakeDriver.writes
-            state['enabled']=True;pump(.3);state['raw']=.6;pump(.2);state['raw']=.5;pump(.2)
+            set_enabled(True);state['enabled']=True;pump(.3);state['raw']=.6;pump(.2);state['raw']=.5;pump(.2)
             assert latest.get('following'),latest
             state['raw']=1.;pump(.12)
             assert FakeDriver.writes and max(FakeDriver.writes)<=1670
@@ -71,10 +74,10 @@ def run():
             assert latest.get('following')
             state['stale']=True;pump(.15);count=len(FakeDriver.writes);pump(.15)
             assert len(FakeDriver.writes)==count and not latest.get('input_fresh')
-            state.update(stale=False,enabled=False);pump(.2)
+            set_enabled(False);state.update(stale=False,enabled=False);pump(.2)
             assert len(FakeDriver.writes)==count
             assert not node.get_publishers_info_by_topic('/scaled_joint_trajectory_controller/joint_trajectory')
-            print('ROS gripper lifecycle passed: startup, pickup, loss, recovery, stale stamps, STOP; no arm publisher')
+            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP; no arm publisher')
         finally:
             ex.remove_node(node);node.destroy_node();fixture.destroy_node();ex.shutdown();rclpy.shutdown()
 

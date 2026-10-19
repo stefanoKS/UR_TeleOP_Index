@@ -299,3 +299,41 @@ The initial pytest invocation lacked the overlay and failed collection; sourcing
 ## Gripper regression and physical assessment
 
 The independent ST3215 package adds mock-worker, actual SDK/pseudo-terminal, ROS lifecycle and GUI calibration coverage. Follow [Gripper automated validation](GRIPPER.md#automated-validation) and its separate supervised physical sequence. Never point automated serial tests at a physical adapter.
+
+## V6 independent gripper, Dashboard start and ordered shutdown
+
+New automated coverage:
+
+- `test_program_control.py`: Remote Control/mode/safety refusal, correct/already-running program, load-then-verify, Play acknowledgment without running readback, duplicate START, late replies after STOP, driver readiness bound, and shutdown ordering.
+- `program_dashboard_check.py`: mocked Humble Dashboard services on an isolated domain exercise the same start sequence plus confirmed/refused Dashboard Stop, with no UR driver or motion.
+- `test_desktop.py`: program stop is requested before process signals; an arm/driver failure stops only arm groups and retains the gripper child.
+- `test_gripper.py`, `ros_gripper_check.py`, `test_gripper_gui.py`: gripper follow with no arm backend, STOP GRIPPER target withdrawal, duplicate owner, disabled profile, pressed-trigger startup, bounded travel, and STOP ALL.
+
+Run with the documented isolated domain and source overlay:
+
+```bash
+export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=147
+/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_bus_servo_gripper/test -q
+/usr/bin/python3 ur_teleop_ws/src/ur_bus_servo_gripper/test/ros_gripper_check.py
+/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test -q
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/ros_integration_checks.py
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/program_dashboard_check.py
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/calibration_ros_check.py
+```
+
+### V6 hardware validation checklist (PENDING unless actually performed)
+
+**Gripper (supervised, arm disarmed):**
+
+1. Detect the real USB adapter and confirm the ST3215 ID, firmware mode, angle limits and actual encoder feedback read-only.
+2. Confirm the physical OPEN/CLOSED travel and direction; verify trigger endpoints and inversion.
+3. Verify ENABLE GRIPPER with A released, with A held, before START TELEOP, and with External Control stopped.
+4. Verify deliberate trigger pickup, STOP GRIPPER hold, USB disconnect/reconnect, and no replay.
+5. Verify STOP ALL and workcell emergency-stop interaction. Never treat software STOP as an emergency stop.
+
+**UR10e (authorized supervision):**
+
+1. Select Remote Control and verify the approved External Control `.urp` through **Settings → External Control program**.
+2. Press START TELEOP; confirm Dashboard check/load/play, reverse-interface connection, and no unintended motion on program start.
+3. Confirm Local Control and protective-stop refusals, STOP during startup, recovery after program interruption, and Dashboard Stop before ROS shutdown.
+4. Do not perform unsupervised motion while the previously reported wrist/arm oscillation remains unresolved. This work does not claim to fix that oscillation.

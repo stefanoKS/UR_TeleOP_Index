@@ -7,7 +7,6 @@ from tkinter import ttk
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from ur_bus_servo_gripper.gripper_config import Config, load, save
-from ur_bus_servo_gripper.gripper_calibration import stationary_disarmed
 from ur_bus_servo_gripper.st3215_driver import ports
 
 
@@ -62,9 +61,9 @@ class GripperPanel:
                 widget = ttk.Entry(body, textvariable=variable, width=36)
             widget.grid(row=row, column=1, sticky='ew', pady=1)
         row = len(labels) + 2
-        for label, variable in [('Enable trigger follow on future START', self.enabled),
+        for label, variable in [('Enable trigger follow on future sessions', self.enabled),
                                 ('Invert trigger', self.invert),
-                                ('Authorize low-speed calibration (arm disarmed, A released)', self.authorized)]:
+                                ('Authorize low-speed calibration (mechanism clear and supervised)', self.authorized)]:
             ttk.Checkbutton(body, text=label, variable=variable).grid(row=row, columnspan=2, sticky='w')
             row += 1
         actions = [('Connect / Read Servo', lambda: self.request('connect')),
@@ -88,16 +87,12 @@ class GripperPanel:
         self.window.protocol('WM_DELETE_WINDOW', self.close)
         self.window.after(100, self.poll)
 
-    def disarmed(self):
-        return (time.monotonic() - self.gui.last_status_at < .25
-                and stationary_disarmed(self.gui.last_status))
-
     def request(self, name):
-        if not self.disarmed():
-            self.message.set('Fresh stationary disarmed arm and A released required')
-            return
+        # Connect, read and reload are read-only and independent of the arm.
+        # Motion services need explicit gripper calibration consent only.
         if name in ('jog_open', 'jog_close', 'open', 'close', 'follow') and not self.authorized.get():
-            self.message.set('Explicitly authorize low-speed calibration first')
+            self.message.set('Explicitly authorize low-speed calibration first '
+                             '(mechanism clear and supervised)')
             return
         if self.ros_future is not None:
             self.message.set('Request pending')
@@ -112,8 +107,8 @@ class GripperPanel:
     def capture(self, key):
         data = self.gui.gripper_data
         fb = data.get('feedback', {})
-        if not self.disarmed() or not data.get('feedback_valid') or time.monotonic()-self.gui.gripper_at >= .25:
-            self.message.set('Fresh measured feedback and disarmed arm required')
+        if not data.get('feedback_valid') or time.monotonic()-self.gui.gripper_at >= .25:
+            self.message.set('Fresh measured feedback required')
             return
         self.fields[key].set(str(fb['ticks']))
         self.fields['servo_id'].set(str(data['identity']['servo_id']))
@@ -125,8 +120,8 @@ class GripperPanel:
 
     def save(self):
         try:
-            if not self.disarmed() or self.future is not None:
-                raise ValueError('Save requires disarmed stationary arm and no pending file operation')
+            if self.future is not None:
+                raise ValueError('A settings file operation is already pending')
             base = asdict(Config())
             for key, var in self.fields.items():
                 base[key] = str(var.get()) if key == 'port' else type(base[key])(var.get())
@@ -141,17 +136,15 @@ class GripperPanel:
     def poll(self):
         if self.closed:
             return
-        if not self.disarmed() or not self.gui.heartbeat_allowed:
-            # Calibration deliberately uses its own consent heartbeat while the
-            # normal operator heartbeat is withheld by STOP.
-            if not self.disarmed():
-                self.authorized.set(False)
-        self.publisher.publish(Bool(data=self.authorized.get() and self.disarmed()))
+        # Calibration consent is gripper-owned.  It does not depend on the arm
+        # being connected, disarmed or stationary.
+        self.publisher.publish(Bool(data=self.authorized.get()))
         data = self.gui.gripper_data
         fresh = time.monotonic() - self.gui.gripper_at < .25
         fb = data.get('feedback', {}) if fresh and data.get('feedback_valid') else {}
         self.telemetry.set(f"Connection: {data.get('connection', 'Disconnected') if fresh else 'Disconnected'}  "
-            f"Servo ID: {data.get('identity', {}).get('servo_id', '—')}\n"
+            f"Servo ID: {data.get('identity', {}).get('servo_id', '—')}  "
+            f"Session enabled: {data.get('session_enabled', False) if fresh else False}\n"
             f"Current Position: {fb.get('ticks', 'unavailable')} ticks\n"
             f"Raw trigger: {data.get('raw_trigger')} · Observed range: {data.get('observed_trigger_range')}\n{data.get('reason', '')}")
         if self.future and self.future[1].done():

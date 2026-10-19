@@ -34,3 +34,19 @@ def test_stop_withdraws_calibration_consent_before_disarm():
     gui.gripper_panel.authorized.set.assert_called_once_with(False)
     assert gui.gripper_panel.publisher.publish.call_args.args[0].data is False
     assert gui.heartbeat_allowed is False
+
+
+def test_stop_all_withdraws_arm_and_gripper_independently():
+    from concurrent.futures import Future
+    gui=OperatorGUI.__new__(OperatorGUI)
+    gui.startup=Mock();gui.startup_request=None;gui.program=Mock();gui.program_request=None
+    gui.heartbeat=Mock();gui.call=Mock();gui.notify=Mock();gui.gripper_request=None
+    gui.gripper_enable_client=Mock();gui.gripper_enable_client.service_is_ready.return_value=True
+    future=Future();future.set_result(SimpleNamespace(success=True,message='disabled'))
+    gui.gripper_enable_client.call_async.return_value=future
+    gui.gripper_panel=SimpleNamespace(closed=False,authorized=Mock(),publisher=Mock())
+    gui.stop_all()
+    gui.program.stop.assert_called_once()
+    gui.call.assert_called_with('disarm')
+    assert gui.gripper_enable_client.call_async.call_args.args[0].data is False
+    assert gui.gripper_panel.publisher.publish.call_args.args[0].data is False

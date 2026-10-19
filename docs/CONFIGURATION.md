@@ -83,6 +83,16 @@ Only the managed desktop consumes driver-tuning keys. Editing them while ROS is 
 
 Camera node `/d405_camera` declares `serial` with the same default. Its resolution/rate (640×480/15 fps) are capture implementation constants, not ROS parameters. Camera failure does not relax or add robot readiness conditions.
 
+### Dashboard program control
+
+| Key | Meaning | Default | Validation | Restart |
+|---|---|---|---|---|
+| `dashboard.remote_program_control_enabled` | Allow START TELEOP to manage the approved External Control program through `/dashboard_client` | false | Boolean; requires a configured program | Next START |
+| `dashboard.external_control_program` | Approved `.urp` name or path | empty | Non-empty when enabled; max 255 characters; no control characters | Next START |
+| `dashboard.timeouts.*` | Per-stage service/readback deadlines in seconds | see YAML | 0.1–60 s each | Next START |
+
+`Settings → External Control program` writes a version-1 `program_control.json` beside the selected YAML; it overrides these dashboard fields without changing robot identity or teleop tuning. The app compares the Dashboard-reported loaded program by final path component. It does not guess a `.urp` name from a pendant program-node label, replace an unrelated running program, or change Remote Control mode. The generated driver command keeps `headless_mode:=false`; do not combine headless operation with Dashboard Play.
+
 ## Launch and bridge controls
 
 | Control | Meaning / unit | Default | Allowed / overrides | Restart |
@@ -268,4 +278,4 @@ Configured TCP consistency uses output-only RTDE protocol 2 on robot port 30004 
 
 ## Gripper settings
 
-`gripper.process_enabled` in the selected YAML defaults true and controls only optional child startup (restart required). Adjacent `gripper.json` is a separate version-1 calibration, initially absent/disabled, with explicit endpoint/travel validation and atomic saving. It does not change arm operator preferences. See the [gripper parameter table](GRIPPER.md#settings-json-version-1).
+`gripper.process_enabled` in the selected YAML defaults true and controls only optional child startup (restart required). Adjacent `gripper.json` is a separate version-1 calibration, initially absent/disabled, with explicit endpoint/travel validation and atomic saving. It does not change arm operator preferences. See the [gripper parameter table](GRIPPER.md#settings-json-version-1). The saved `enabled` value means the profile is calibrated/available; it does not reauthorize movement after a restart. Normal follow additionally requires the latched `/gripper/set_enabled` session and the gripper heartbeat.

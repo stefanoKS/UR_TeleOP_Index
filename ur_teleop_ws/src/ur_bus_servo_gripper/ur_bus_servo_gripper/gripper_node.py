@@ -1,4 +1,9 @@
-"""Read-only arm supervision and independent gripper topics/services."""
+"""Read-only independent gripper supervision, services and diagnostics.
+
+The gripper owns its own session enable and operator heartbeat.  It consumes
+only the VR bridge's Joy/pose/optical signals; no arm enable, motion-ready,
+External Control or Servo state is required for normal trigger follow.
+"""
 import json
 import math
 import os
@@ -9,9 +14,8 @@ from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor, await_or_execute
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Bool, String, Float64, Int32
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 from .gripper_config import load
-from .gripper_calibration import stationary_disarmed
 from .gripper_worker import Worker
 
 
@@ -47,7 +51,6 @@ class GripperNode(Node):
         self.flags = {'pose': False, 'optical': False}
         self.auto_connect = True
         self.trigger_min = self.trigger_max = None
-        self.managed_session = os.environ.get('UR_TELEOP_MANAGED_SESSION', '')
         self.last_feedback = self.last_command = None
         self.state_pub = self.create_publisher(String, '/gripper/status', 1)
         self.joint_pub = self.create_publisher(JointState, '/gripper/joint_states', 1)
@@ -56,11 +59,11 @@ class GripperNode(Node):
         self.subscribe(Joy, '/vr/controller/joy', self.joy, 1)
         self.subscribe(Bool, '/vr/controller/pose_fresh', self.pose, 1)
         self.subscribe(Bool, '/vr/controller/optical_fresh', self.optical, 1)
-        self.subscribe(String, '/vr_real/operator_status', self.backend, 1)
-        self.subscribe(Bool, '/vr_real/operator_present', self.heartbeat, 1)
+        self.subscribe(Bool, '/gripper/operator_present', self.heartbeat, 1)
         self.subscribe(Bool, '/gripper/calibration_present', self.calibration, 1)
         for action in ('connect', 'read', 'reload', 'jog_open', 'jog_close', 'open', 'close', 'follow'):
             self.create_service(Trigger, '/gripper/' + action, self.service(action))
+        self.create_service(SetBool, '/gripper/set_enabled', self.set_enabled)
         self.create_timer(.04, self.tick)
         self.worker.start()
 
@@ -109,29 +112,35 @@ class GripperNode(Node):
     def optical(self, msg, info):
         self.flag('optical', msg, info)
 
-    def backend(self, msg, info):
-        try:
-            status = json.loads(msg.data) if self.source_fresh(info) else {}
-            if (not isinstance(status, dict) or not status.get('session_id') or
-                    (self.managed_session and status.get('managed_session_id') != self.managed_session)):
-                status = {}
-        except (ValueError, TypeError):
-            status = {}
-        self.worker.update('backend', status)
-        if self.auto_connect and stationary_disarmed(status):
-            self.auto_connect = False
-            try:
-                if load(self.worker.path).enabled:
-                    self.worker.request('connect')
-            except (OSError, ValueError, TypeError) as exc:
-                self.get_logger().error(str(exc))
-                self.worker.request('connect')
-
     def heartbeat(self, msg, info):
         self.worker.update('heartbeat', msg.data and self.source_fresh(info))
 
     def calibration(self, msg, info):
         self.worker.update('calibration', msg.data and self.source_fresh(info))
+
+    def set_enabled(self, request, response):
+        """Session authorization is independent of arm teleoperation."""
+        if request.data:
+            try:
+                config = load(self.worker.path)
+                config.validate(calibrated=True)
+                if not config.enabled:
+                    raise ValueError('saved profile has trigger follow disabled')
+            except (OSError, ValueError, TypeError) as exc:
+                response.success = False
+                response.message = ('Gripper profile is not calibrated or enabled: ' + str(exc)
+                                    + '. Connect read-only, review travel and save a complete profile.')
+                return response
+            if self.worker.snapshot().get('duplicate_owner') is True:
+                response.success = False
+                response.message = 'Duplicate gripper node or serial owner detected; follow not enabled'
+                return response
+        self.worker.update('session_enabled', bool(request.data))
+        response.success = True
+        response.message = ('Gripper session enabled; move the trigger >=5% to pick up'
+                            if request.data else
+                            'Gripper follow withdrawn; last acknowledged bounded hold target retained')
+        return response
 
     def service(self, action):
         def request(_request, response):
@@ -141,18 +150,27 @@ class GripperNode(Node):
         return request
 
     def tick(self):
-        # Ambiguous graph ownership cannot authorize a gripper.
-        for topic, key in (('/vr_real/operator_status', 'backend'),
-                           ('/vr/controller/joy', 'joy'), ('/vr_real/operator_present', 'heartbeat'),
-                           ('/gripper/calibration_present', 'calibration'), ('/vr/controller/pose_fresh', 'pose'), ('/vr/controller/optical_fresh', 'optical')):
+        if self.auto_connect:
+            self.auto_connect = False
+            # Read-only discovery at startup; never a target, torque or save.
+            self.worker.request('connect')
+        # Ambiguous graph ownership cannot authorize a gripper.  The arm
+        # backend is deliberately not part of this list.
+        for topic, key in (('/vr/controller/joy', 'joy'),
+                           ('/gripper/operator_present', 'heartbeat'),
+                           ('/gripper/calibration_present', 'calibration'),
+                           ('/vr/controller/pose_fresh', 'pose'),
+                           ('/vr/controller/optical_fresh', 'optical')):
             if self.count_publishers(topic) != 1:
                 self.worker.update(key, None)
+        # Two status publishers imply two gripper nodes competing for one servo.
+        self.worker.update('duplicate', self.count_publishers('/gripper/status') > 1)
         status = self.worker.snapshot()
         fb = status.get('feedback')
         if fb and time.monotonic() - fb['received_at'] >= .25:
-            status.update(feedback_valid=False, status='Fault', reason='Serial feedback stale')
+            status.update(feedback_valid=False, status='Fault', reason='Serial feedback stale; reconnect required')
         stamp = self.get_clock().now().to_msg()
-        status['schema_version'] = 1
+        status['schema_version'] = 2
         status['observed_trigger_range'] = [self.trigger_min, self.trigger_max]
         status['stamp'] = {'sec': stamp.sec, 'nanosec': stamp.nanosec}
         if fb and status.get('feedback_valid') and fb['received_at'] != self.last_feedback:

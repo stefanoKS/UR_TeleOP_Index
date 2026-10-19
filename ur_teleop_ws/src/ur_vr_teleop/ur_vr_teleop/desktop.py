@@ -122,13 +122,17 @@ def validate_controller_file(path):
         parameters.cleanup()
 
 class ProcessManager:
-    def __init__(self, config, root=None, conflict_check=foreign_processes):
+    def __init__(self, config, root=None, conflict_check=foreign_processes, program_stop=None):
         self.config = Path(config)
         self.root = Path(root or Path.home()/'Documents/Teleop/ur_teleop')
         self.conflict_check = conflict_check
+        self.program_stop = program_stop
         self.children = {}
+        self.log_files = {}
         self.logs = []
         self.stopping = False
+        self.stop_scope = None
+        self.program_stop_result = None
         self.restart_mode = None
         self.live = False
         self.message = 'Stopped'
@@ -251,8 +255,11 @@ class ProcessManager:
         self.message = ('LIVE' if live else 'PREVIEW')+' stack started, motion disabled. Logs: '+str(self.directory)
 
     def spawn(self, name, command):
+        if hasattr(self, 'optional_failed'):
+            self.optional_failed.discard(name)
         log = (self.directory/(name+'.log')).open('a')
         self.logs.append(log)
+        self.log_files[name] = log
         wrapper = [sys.executable, '-m', 'ur_vr_teleop.process_ownership', str(os.getpid())]
         self.children[name] = subprocess.Popen(wrapper+command, stdout=log, stderr=subprocess.STDOUT,
             env=self.environment, start_new_session=True)
@@ -267,23 +274,81 @@ class ProcessManager:
         self.spawn('rviz', self.rviz_command())
         self.message = 'RViz opened with the commissioning marker display.'
 
-    def stop(self, restart=None):
+    def stop(self, restart=None, scope=None, program_timeout=2.0):
+        """Stop all owned groups, or only ``scope`` while retaining the rest.
+
+        For any stop that includes the driver, the confirmed Dashboard program
+        stop happens before the driver receives a signal.  Its bounded failure
+        is reported but never blocks the existing fail-safe termination.
+        """
         self.restart_mode = restart
         if self.stopping:
             return
+        self.stop_scope = set(scope) if scope else None
         self.stopping, self.stop_started, self.escalation = True, time.monotonic(), 0
-        self.signal_groups(signal.SIGINT)
+        self.program_stop_result = self.graceful_program_stop(program_timeout)
+        self.signal_groups(signal.SIGINT, self.stop_scope)
 
-    def signal_groups(self, sig):
-        # Descendants may leave their original process group. Match inherited
-        # ownership tags plus immutable process identities, never executable names.
-        for saved in self.scan_owned(force=True):
-            send_signal(saved, sig)
+    def driver_alive(self):
+        driver = self.children.get('driver')
+        return driver is not None and driver.poll() is None
 
-    def groups_alive(self):
-        for process in self.children.values():
-            process.poll()  # reap leaders
-        return bool(self.scan_owned(force=True))
+    def graceful_program_stop(self, timeout):
+        from .program_control import ProgramStopResult
+        if not self.driver_alive():
+            return ProgramStopResult(
+                'unavailable',
+                'UR driver is not running; no Dashboard program stop was possible.')
+        try:
+            if self.program_stop is not None:
+                return self.program_stop(timeout)
+            from .dashboard_services import stop_program
+            return stop_program(timeout)
+        except Exception as error:
+            return ProgramStopResult('unknown', str(error))
+
+    def signal_groups(self, sig, scope=None):
+        if scope is None:
+            # Descendants may leave their original process group. Match inherited
+            # ownership tags plus immutable process identities, never executable names.
+            for saved in self.scan_owned(force=True):
+                send_signal(saved, sig)
+            for process in self.children.values():
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid, sig)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            return
+        # Partial stop is deliberately limited to named launch groups.  Optional
+        # peripherals (gripper/camera) keep their serial/process ownership.
+        for name in scope:
+            process = self.children.get(name)
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(process.pid, sig)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+    def groups_alive(self, scope=None):
+        if scope is None:
+            for process in self.children.values():
+                process.poll()  # reap leaders
+            return bool(self.scan_owned(force=True))
+        alive = False
+        for name in scope:
+            process = self.children.get(name)
+            if process is None:
+                continue
+            if process.poll() is None:
+                alive = True
+                continue
+            try:
+                os.killpg(process.pid, 0)
+                alive = True
+            except (ProcessLookupError, PermissionError):
+                pass
+        return alive
 
     def child_log_failure(self):
         # ros2 launch may survive a critical child crash. Read only new log
@@ -321,36 +386,71 @@ class ProcessManager:
             failed = [name for name, p in self.children.items() if name not in ('rviz', 'camera', 'gripper') and p.poll() is not None]
             if failed:
                 reasons = ', '.join(f'{name}(exit {self.children[name].returncode})' for name in failed)
-                self.message = ('Process exited: ' + reasons + '. Stack stopped; logs: ' + str(self.directory)
+                self.message = ('Process exited: ' + reasons + '. Robot stack stopped; the independent '
+                                'gripper process is retained. Logs: ' + str(self.directory)
                                 + '.' + self.record_crash(failed) + ' Inspect the failing component, then use Restart ROS.')
-                self.stop()
+                # Stop only arm/servo/tracking groups.  The gripper keeps its
+                # serial ownership and remains diagnosable without the driver.
+                self.stop(scope={'driver', 'teleop', 'tracking', 'rviz'}, program_timeout=1.0)
             else:
                 failure = self.child_log_failure()
                 if failure:
-                    self.message = ('ROS child failed; owned stack stopped. ' + failure
+                    self.message = ('ROS child failed; robot stack stopped, gripper retained. ' + failure
                                     + '.' + self.record_crash([failure.split(':', 1)[0]]))
-                    self.stop()
+                    self.stop(scope={'driver', 'teleop', 'tracking', 'rviz'}, program_timeout=1.0)
+                else:
+                    for name in ('gripper', 'camera', 'rviz'):
+                        process = self.children.get(name)
+                        if (process is not None and process.poll() is not None
+                                and name not in getattr(self, 'optional_failed', set())):
+                            self.optional_failed = getattr(self, 'optional_failed', set()) | {name}
+                            if name == 'gripper':
+                                self.message = ('Gripper process exited; arm teleoperation is unaffected. '
+                                                'Inspect the gripper log, then use Restart ROS to reconnect.')
+                            else:
+                                self.message = f'{name} process exited; arm operation is unaffected.'
         if self.stopping:
+            scope = self.stop_scope
             age = time.monotonic()-self.stop_started
             if age > 3 and self.escalation == 0:
-                self.signal_groups(signal.SIGTERM)
+                self.signal_groups(signal.SIGTERM, scope)
                 self.escalation = 1
             if age > 5 and self.escalation == 1:
-                self.signal_groups(signal.SIGKILL)
+                self.signal_groups(signal.SIGKILL, scope)
                 self.escalation = 2
-            if not self.groups_alive():
-                self.children.clear()
-                for log in self.logs:
-                    log.close()
-                self.logs.clear()
-                self.clear_manifest()
-                self.token = None
-                restart, self.restart_mode, self.stopping = self.restart_mode, None, False
-                if restart is not None:
-                    try:
-                        self.start(restart)
-                    except Exception as error:
-                        self.message = 'Restart failed: '+str(error)
+            if not self.groups_alive(scope):
+                if scope is None:
+                    self.children.clear()
+                    for log in self.logs:
+                        log.close()
+                    self.logs.clear()
+                    self.log_files.clear()
+                    self.clear_manifest()
+                    self.token = None
+                    restart, self.restart_mode = self.restart_mode, None
+                    self.stopping = self.stop_scope = None
+                    self.escalation = 0
+                    if restart is not None:
+                        try:
+                            self.start(restart)
+                        except Exception as error:
+                            self.message = 'Restart failed: '+str(error)
+                else:
+                    for name in scope:
+                        self.children.pop(name, None)
+                        log = self.log_files.pop(name, None)
+                        if log is not None:
+                            try:
+                                log.close()
+                            except OSError:
+                                pass
+                            if log in self.logs:
+                                self.logs.remove(log)
+                    self.stopping = self.stop_scope = None
+                    self.escalation = 0
+                    if not self.children:
+                        self.clear_manifest()
+                        self.token = None
 
     def close(self):
         self.stop()
@@ -358,6 +458,17 @@ class ProcessManager:
         while self.stopping and time.monotonic() < until:
             self.poll()
             time.sleep(.05)
+        # A close that arrived during a partial arm stop must still terminate the
+        # retained gripper (and release its serial device).
+        if self.children and not self.stopping:
+            self.stop()
+            until = time.monotonic()+7
+            while self.stopping and time.monotonic() < until:
+                self.poll()
+                time.sleep(.05)
+        if not self.stopping and not self.children and self.token:
+            self.clear_manifest()
+            self.token = None
         self.signal_groups(signal.SIGKILL)
 
 

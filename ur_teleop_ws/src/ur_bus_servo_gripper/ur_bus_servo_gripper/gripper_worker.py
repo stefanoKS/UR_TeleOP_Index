@@ -1,11 +1,18 @@
-"""Serial owner with one pending action and latest-only input. Never runs in ROS/Tk."""
+"""Serial owner with one pending action and latest-only input. Never runs in ROS/Tk.
+
+Gripper authorization is deliberately independent of the UR arm.  It is owned by
+this worker from an explicit session enable, the saved/calibrated profile, the
+gripper operator heartbeat and the bridge's fresh Joy/pose/optical signals.  The
+arm backend's enable/motion-ready/motion-output flags are never consulted.
+"""
 from dataclasses import asdict, replace
 import threading
 import time
 from .gripper_config import Config, load
 from .gripper_mapping import Follow, normalize, target_ticks
-from .gripper_calibration import stationary_disarmed, jog_target
+from .gripper_calibration import jog_target
 from .st3215_driver import Driver
+
 
 
 class Worker:
@@ -14,6 +21,8 @@ class Worker:
         self.lock = threading.Lock()
         self.quit = threading.Event()
         self.inputs = {}
+        # Session enable is latched until STOP GRIPPER; it is not a heartbeat.
+        self.session_enabled = False
         self.action = None
         self.epoch = self.seen_epoch = 0
         self.output = {'connection': 'Disconnected', 'status': 'Holding', 'reason': 'Not connected'}
@@ -34,14 +43,16 @@ class Worker:
 
     def update(self, key, value):
         with self.lock:
+            if key == 'session_enabled':
+                value = bool(value)
+                if value != self.session_enabled:
+                    self.session_enabled = value
+                    self.epoch += 1
+                return
             now = time.monotonic()
             old, at = self.inputs.get(key, (None, -float('inf')))
             if (now - at >= .25 or ((value is False or value is None) and value != old) or
-                    (key == 'backend' and isinstance(value, dict) and any(value.get(k) != (old or {}).get(k)
-                     for k in ('enable_requested', 'session_id', 'motion_ready', 'tracking_valid',
-                               'motion_output_enabled', 'robot_fault')))):
-                self.epoch += 1
-            if key == 'backend' and stationary_disarmed(value or {}) != stationary_disarmed(old or {}):
+                    (key == 'duplicate' and bool(value) and not bool(old))):
                 self.epoch += 1
             self.inputs[key] = (value, now)
 
@@ -91,19 +102,17 @@ class Worker:
         def recent(key, seconds=.25):
             value, at = inputs.get(key, (None, -float('inf')))
             return value if now - at < seconds else None
-        backend = recent('backend') or {}
-        disarmed = stationary_disarmed(backend)
-        calibration = disarmed and recent('calibration') is True
+        setup = recent('calibration') is True
+        session = self.session_enabled
+        heartbeat = recent('heartbeat') is True
+        duplicate = recent('duplicate') is True
+        calibration = setup and not duplicate
         reason = 'Holding; authorization withdrawn'
-        if self.session != backend.get('session_id'):
-            self.follow.reset()
-            self.calibration_target = None
-            self.session = backend.get('session_id')
         if action and now - action[1] < .5:
             name = action[0]
             if name in ('connect', 'reload'):
-                if not disarmed:
-                    raise ValueError('Connect/reload requires fresh disarmed stationary arm and A released')
+                # Read-only discovery is independent of the arm and external
+                # program.  No target or torque command is sent here.
                 self.disconnect()
                 self.config = load(self.path)
                 self.follow = Follow(self.config)
@@ -118,7 +127,9 @@ class Worker:
                 return
             if name != 'read':
                 if not calibration or self.feedback is None:
-                    raise ValueError('Authorize calibration with fresh stationary disarmed arm and feedback')
+                    raise ValueError(
+                        'Authorize gripper calibration (mechanism clear, supervised) and '
+                        'connect with fresh feedback before calibration movement')
                 self.config.validate(calibrated=True)
                 if name == 'follow':
                     self.calibration_follow = True
@@ -141,12 +152,11 @@ class Worker:
         feedback_wall_ns = time.time_ns()
         if fb.motor_status or fb.temperature_c >= self.config.temperature_limit:
             raise IOError(f'Motor fault status=0x{fb.motor_status:02x}; temperature={fb.temperature_c} C')
+        # Bridge signs: fresh accepted pose stream, fresh optical signal and a
+        # fresh Joy.  Arm enable/motion flags deliberately do not appear here.
         valid_input = (recent('pose') is True and recent('optical') is True
-                       and recent('joy') is not None and backend.get('tracking_valid') is True)
-        authorized = (self.config.enabled and recent('heartbeat') is True
-                      and backend.get('enable_requested') is True
-                      and backend.get('motion_ready') is True
-                      and backend.get('motion_output_enabled') is True)
+                       and recent('joy') is not None and not duplicate)
+        authorized = self.config.enabled and session and heartbeat and not duplicate
         fraction = None
         if valid_input:
             try:
@@ -176,7 +186,18 @@ class Worker:
             self.follow = Follow(self.config)
             self.calibration_target = None
             self.calibration_follow = False
-            reason = 'Input invalid; holding, fresh pickup required' if not valid_input else reason
+            if duplicate:
+                reason = 'Duplicate gripper node or serial owner detected; follow disabled'
+            elif not self.config.enabled:
+                reason = 'Gripper profile is not enabled; calibrate and enable it in Gripper Setup'
+            elif not session:
+                reason = 'Gripper session not enabled; press ENABLE GRIPPER'
+            elif not heartbeat:
+                reason = 'Gripper operator heartbeat missing; authorization withdrawn'
+            elif not valid_input:
+                reason = 'Controller pose/optical/trigger input stale or invalid; holding, fresh pickup required'
+            else:
+                reason = 'Holding; authorization withdrawn'
         # Error is diagnostic, never proof of grip. Halt target advancement on lack of progress.
         desired = (self.calibration_target if calibration and self.calibration_target is not None else
                    target_ticks(fraction, self.config) if (authorized or calibration) and self.follow.active and fraction is not None else None)
@@ -189,29 +210,43 @@ class Worker:
             self.stall_since = self.last_progress = None
         # Recheck latest withdrawal after bounded reads and before issuing a packet.
         with self.lock:
-            latest, current_epoch = dict(self.inputs), self.epoch
+            latest, current_epoch, live_session = dict(self.inputs), self.epoch, self.session_enabled
         current = time.monotonic()
         def live(key):
             value, at = latest.get(key, (None, -float('inf')))
             return value if current - at < .25 else None
-        safe = (stationary_disarmed(live('backend') or {}) and live('calibration') is True) if calibration else (
-            live('heartbeat') is True and live('pose') is True and live('optical') is True
-            and live('joy') is not None and (live('backend') or {}).get('enable_requested') is True
-            and (live('backend') or {}).get('motion_ready') is True
-            and (live('backend') or {}).get('motion_output_enabled') is True)
+        physical_calibration = calibration and self.calibration_target is not None
+        if physical_calibration or self.calibration_follow:
+            # Calibration consent is the only authorization for setup movement.
+            safe = live('calibration') is True
+        else:
+            safe = (live_session and live('heartbeat') is True
+                    and live('duplicate') is not True)
         if self.calibration_follow:
+            safe = (safe and live('calibration') is True and live('pose') is True
+                    and live('optical') is True and live('joy') is not None)
+        elif target is not None and not physical_calibration:
             safe = safe and live('pose') is True and live('optical') is True and live('joy') is not None
-            safe = safe and (live('backend') or {}).get('tracking_valid') is True
         if target is not None and safe and epoch == current_epoch and not self.quit.is_set():
             self.attempted_ticks, self.attempt_at = target, time.time_ns()
             self.write_acknowledged = False
             self.driver.write(target, calibration=calibration)
             self.write_acknowledged = True
             self.commanded, self.command_at = target, time.time_ns()
+        connected_with_fault = duplicate
+        try:
+            self.config.validate(calibrated=True)
+            calibration_complete = True
+        except ValueError:
+            calibration_complete = False
         with self.lock:
-            self.output = dict(connection='Connected', status=('Fault' if not valid_input and backend.get('enable_requested') and self.config.enabled
-                        else 'Moving' if fb.moving else 'Ready' if authorized and not self.follow.active else 'Holding'),
-                reason=reason, connected=True, feedback_valid=True,
+            self.output = dict(connection='Fault' if connected_with_fault else 'Connected',
+                status=('Fault' if connected_with_fault else 'Moving' if fb.moving else
+                        'Ready' if authorized and valid_input and not self.follow.active else 'Holding'),
+                reason=reason, connected=not connected_with_fault, feedback_valid=True,
+                session_enabled=session, heartbeat_fresh=heartbeat, authorized=authorized,
+                setup_authorized=setup, duplicate_owner=duplicate,
+                profile_enabled=self.config.enabled, calibration_complete=calibration_complete,
                 feedback=asdict(fb), feedback_wall_ns=feedback_wall_ns,
                 commanded_ticks=self.commanded, command_wall_ns=self.command_at,
                 attempted_ticks=self.attempted_ticks, write_started_wall_ns=self.attempt_at,
@@ -232,6 +267,8 @@ class Worker:
                     with self.lock:
                         self.output = dict(connection='Fault', status='Fault', connected=False,
                                            feedback_valid=False, reason=str(exc), motor_fault=str(exc),
+                                           session_enabled=self.session_enabled,
+                                           authorized=False, profile_enabled=self.config.enabled,
                                            attempted_ticks=self.attempted_ticks, write_started_wall_ns=self.attempt_at,
                                            write_acknowledged=self.write_acknowledged)
                 self.quit.wait(max(0., .04 - (time.monotonic() - started)))

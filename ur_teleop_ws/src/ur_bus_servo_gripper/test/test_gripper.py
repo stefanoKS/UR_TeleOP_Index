@@ -92,12 +92,6 @@ class FakeDriver:
     def close(self): self.closed=True
 
 
-def backend(enabled=False):
-    return dict(session_id='one', armed=False,enable_requested=enabled,a_held=False,
-                setup_feedback_fresh=True,robot_fault=False,measured_joint_velocity=[0.]*6,
-                motion_ready=True,motion_output_enabled=True,tracking_valid=True)
-
-
 @pytest.fixture
 def worker(tmp_path,config,monkeypatch):
     save(tmp_path/'g.json',config)
@@ -106,15 +100,17 @@ def worker(tmp_path,config,monkeypatch):
     now=[100.]
     monkeypatch.setattr(time,'monotonic',lambda:now[0])
     worker.last_time=now[0]
-    worker.update('backend',backend())
+    worker.update('session_enabled',True)
+    worker.update('heartbeat',True)
     worker.request('connect');worker.step()
     worker.now=now
     return worker
 
 
 def drive(w,raw=.5,enabled=True,pose=True,optical=True):
+    # No arm backend input is supplied: gripper authorization is independent.
     w.now[0]+=.04
-    for key,value in dict(backend=backend(enabled),heartbeat=enabled,pose=pose,optical=optical,joy=raw).items():
+    for key,value in dict(session_enabled=enabled,heartbeat=enabled,pose=pose,optical=optical,joy=raw).items():
         w.update(key,value)
     w.step()
 
@@ -134,7 +130,7 @@ def test_start_connect_save_never_moves(worker, tmp_path,config):
 def test_follow_a_independent_stop_and_tracking_loss(worker):
     engage(worker);drive(worker,1)
     assert FakeDriver.writes[-1]==1654
-    # A released is already false in backend; follow remains active.
+    # A release is not part of gripper authorization; follow remains active.
     drive(worker,1); assert len(FakeDriver.writes)==2
     count=len(FakeDriver.writes)
     drive(worker,0,pose=False)
@@ -188,13 +184,14 @@ def test_calibration_authorization(worker):
     worker.request('jog_close');worker.step()
     for _ in range(10):
         worker.now[0]+=.04
-        worker.update('backend',backend());worker.update('calibration',True)
+        worker.update('calibration',True)
         worker.step()
     assert FakeDriver.writes[-1] == 1655
     count=len(FakeDriver.writes)
     worker.update('calibration',False);worker.step()
     assert len(FakeDriver.writes)==count
-    assert not stationary_disarmed(dict(backend(), measured_joint_velocity=None))
+    assert not stationary_disarmed(dict(armed=False, enable_requested=False, a_held=False,
+        setup_feedback_fresh=True, robot_fault=False, measured_joint_velocity=None))
 
 
 def test_stall_does_not_claim_grasp(worker):
@@ -230,11 +227,11 @@ def test_missing_serial(config):
     with pytest.raises(OSError): d.connect()
 
 
-def test_calibration_trigger_requires_pickup_and_retires_on_motion(worker):
+def test_calibration_trigger_requires_pickup_and_retires_on_input_loss(worker):
     drive(worker,.5,enabled=False)
     worker.update('calibration',True)
     worker.request('follow');worker.step()
-    # Keep all disarmed observation streams fresh; pickup itself never writes.
+    # Keep all observation streams fresh; pickup itself never writes.
     def sample(raw):
         worker.update('calibration',True)
         drive(worker,raw,enabled=False)
@@ -242,9 +239,8 @@ def test_calibration_trigger_requires_pickup_and_retires_on_motion(worker):
     assert worker.follow.active
     sample(1.);sample(1.)
     assert FakeDriver.writes[-1] <= 1652  # 25 ticks/s at 25 Hz, threshold two
-    moving=backend();moving['measured_joint_velocity']=[.1]*6
-    worker.update('backend',moving)
-    worker.update('backend',backend())
+    sample(.5)
+    worker.update('pose',False)
     sample(1.)
     assert not worker.calibration_follow
     assert not worker.follow.active
@@ -275,7 +271,7 @@ def test_worker_fault_and_join_remain_responsive(tmp_path,config):
             time.sleep(.05)
             raise IOError('serial timeout')
     w=Worker(tmp_path/'g.json',FailedDriver)
-    w.update('backend',backend());w.request('connect');w.start()
+    w.update('session_enabled',True);w.request('connect');w.start()
     try:
         deadline=time.monotonic()+1
         while time.monotonic()<deadline and w.snapshot().get('status')!='Fault':
@@ -294,19 +290,66 @@ def test_external_encoder_displacement_never_creates_target_jump(config):
     assert f.last_sent==1650
 
 
-def test_real_a_press_release_does_not_retire_gripper_follow(worker):
+def test_arm_state_does_not_affect_gripper_follow(worker):
+    # The worker has no arm backend input at all; A/armed/enable cannot withdraw it.
     engage(worker)
-    worker.update('backend',dict(backend(True),a_held=True,armed=True))
-    worker.step()
-    assert worker.follow.active
-    worker.update('backend',dict(backend(True),a_held=False,armed=True))
-    worker.step()
-    assert worker.follow.active
     drive(worker,1.)
     assert FakeDriver.writes[-1]==1654
+    assert worker.follow.active
 
 
 def test_feedback_outside_reviewed_travel_faults_before_pickup(config):
     f=Follow(config)
     with pytest.raises(ValueError,match='outside reviewed travel'):f.step(.5,2500,.04)
     assert not f.active and f.last_sent is None
+
+
+def test_follow_needs_no_arm_backend_at_all(worker):
+    # There is no backend input in this worker instance.  Trigger follow is
+    # authorized by the gripper session, heartbeat and bridge signals only.
+    engage(worker);drive(worker,1.)
+    assert worker.follow.active and FakeDriver.writes[-1]==1654
+
+
+def test_stop_gripper_withdraws_without_moving_or_releasing(worker):
+    engage(worker);drive(worker,1.)
+    count=len(FakeDriver.writes);commanded=worker.commanded
+    worker.update('session_enabled',False)
+    drive(worker,1.,enabled=False)
+    assert not worker.follow.active
+    assert len(FakeDriver.writes)==count
+    assert worker.commanded==commanded
+    assert worker.snapshot().get('authorized') is False
+
+
+def test_startup_with_trigger_pressed_never_moves(worker):
+    # Connecting and enabling do not pick up a pressed trigger: a >=5%
+    # deliberate excursion is still required.
+    for _ in range(20):
+        drive(worker,1.)
+    assert not worker.follow.active
+    assert not FakeDriver.writes
+
+
+def test_duplicate_owner_blocks_follow(worker):
+    engage(worker)
+    worker.update('duplicate',True)
+    drive(worker,1.)
+    assert not worker.follow.active
+    assert not FakeDriver.writes
+    assert 'Duplicate' in worker.snapshot().get('reason','')
+
+
+def test_disabled_profile_never_authorizes(worker,tmp_path):
+    worker.config=replace(worker.config,enabled=False)
+    worker.follow=Follow(worker.config)
+    drive(worker,1.)
+    assert not worker.follow.active
+    assert not FakeDriver.writes
+    assert 'not enabled' in worker.snapshot().get('reason','')
+
+
+def test_bounded_travel_is_enforced(config):
+    for fraction in (-1,0,.5,1,2):
+        ticks=target_ticks(fraction,config)
+        assert config.min_ticks<=ticks<=config.max_ticks

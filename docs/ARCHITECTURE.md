@@ -198,4 +198,12 @@ The configuration worker checks pendant/profile agreement off the command execut
 
 ## Independent gripper
 
-The managed desktop also owns the optional `ur_bus_servo_gripper` process. Its 25 Hz serial worker reads motor feedback and writes bounded ST3215 targets independently of the UR chain. It observes existing Joy, freshness, optical, operator-heartbeat and backend-status topics; it publishes no UR motion commands. See [Gripper](GRIPPER.md) for authorization, stop/holding policy and timestamped observation interfaces.
+The managed desktop also owns the optional `ur_bus_servo_gripper` process. Its 25 Hz serial worker reads motor feedback and writes bounded ST3215 targets independently of the UR chain. It observes the VR bridge's Joy/pose/optical topics and a gripper-owned operator heartbeat. It does **not** require arm enable intent, motion readiness, A, Servo, the native controller or External Control. `/gripper/set_enabled` latches an independent session permission; the serial worker rechecks it immediately before every packet. Connect, read and save are read-only and available with the robot disconnected. See [Gripper](GRIPPER.md).
+
+An arm/driver/tracking child failure stops only those process groups; the gripper keeps its serial ownership for diagnostics and independent operation. A full Stop ROS or application close terminates both.
+
+## Dashboard program lifecycle
+
+When configured, the GUI owns a pure `ProgramStartup` state machine and calls `/dashboard_client/{is_in_remote_control,get_safety_mode,get_robot_mode,get_loaded_program,program_running,load_program,play}` asynchronously. Each stage has a bounded deadline. A Play acknowledgment is not readiness: Dashboard program-running readback and fresh driver status (`robot_preparation_ready`) are required before controller preparation. STOP retires the generation so late replies cannot enable anything.
+
+The process manager owns shutdown ordering. Before signaling the UR driver on Stop ROS/restart/close it calls the Dashboard stop service while that service is alive, then requires `program_running` readback. Failure or timeout is reported and the existing bounded process termination proceeds; it never reports an unconfirmed program stop as successful.

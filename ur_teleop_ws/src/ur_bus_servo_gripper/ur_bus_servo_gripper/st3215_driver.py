@@ -21,6 +21,23 @@ def ports():
     return sorted(glob('/dev/serial/by-id/*'))
 
 
+def friendly_error(error):
+    """Turn transport errors into actionable operator diagnostics."""
+    text = str(error)
+    lower = text.lower()
+    if isinstance(error, ImportError) or 'scservo_sdk' in lower and 'no module' in lower:
+        return ('ST3215 SDK missing for /usr/bin/python3; run '
+                'ur_teleop/scripts/install_gripper_sdk.py')
+    if 'permission denied' in lower or 'errno 13' in lower:
+        return ('Permission denied opening the serial adapter; check dialout group/udev '
+                'policy and log in again (do not relax permissions globally)')
+    if 'busy' in lower or 'errno 16' in lower:
+        return 'Serial port already in use by another process; stop the other owner first'
+    if 'no such file' in lower or 'errno 2' in lower or 'not found' in lower:
+        return 'USB adapter not found at the configured path; check USB cable and /dev/serial/by-id'
+    return text
+
+
 def checked(result):
     *values, communication, error = result
     if communication != 0 or error != 0:
@@ -35,7 +52,10 @@ def signed(value, bit):
 class Driver:
     def __init__(self, config, sdk=None):
         if sdk is None:
-            import scservo_sdk as sdk
+            try:
+                import scservo_sdk as sdk
+            except ImportError as error:
+                raise IOError(friendly_error(error)) from error
         self.config, self.sdk = config, sdk
         self.port = self.packet = None
         self.servo_id = None
@@ -47,7 +67,8 @@ class Driver:
         path = self.config.port
         if not path:
             if len(paths) != 1:
-                raise IOError('Select exactly one USB adapter using Gripper Setup')
+                raise IOError('USB adapter not found' if not paths else
+                              'Multiple USB serial adapters found; select one /dev/serial/by-id path in Gripper Setup')
             path = paths[0]
         # Use SDK packet implementation with bounded exclusive Linux transport.
         # Its stock clearPort uses unbounded tcdrain; replace with input flush.
@@ -91,7 +112,11 @@ class Driver:
                 elif self.config.servo_id != -1:
                     checked((model, result, error))
             if len(ids) != 1:
-                raise IOError(f'Expected one servo, found IDs {[i[0] for i in ids]}')
+                if not ids:
+                    raise IOError('No ST3215 servo responded; check motor power, baud rate and servo ID')
+                raise IOError('Multiple servo IDs discovered: '
+                              + ', '.join(str(i[0]) for i in ids)
+                              + '; configure the intended ID in Gripper Setup')
             self.servo_id, model = ids[0]
             mode = checked(self.packet.read1ByteTxRx(self.servo_id, 33))
             resolution = checked(self.packet.read1ByteTxRx(self.servo_id, 30))
@@ -99,7 +124,8 @@ class Driver:
             high = checked(self.packet.read2ByteTxRx(self.servo_id, 11))
             phase = checked(self.packet.read1ByteTxRx(self.servo_id, 18))
             if mode != 0 or resolution != 1 or not 0 <= low < high <= 4095:
-                raise IOError('Requires reviewed single-turn mode 0, resolution 1, nonzero angle range')
+                raise IOError('Requires reviewed single-turn mode 0, resolution 1, nonzero angle range'
+                              f' (detected mode={mode}, resolution={resolution}, range={low}..{high})')
             if self.config.enabled and not low <= self.config.min_ticks <= self.config.max_ticks <= high:
                 raise IOError('Calibration exceeds servo angle limits')
             torque = checked(self.packet.read1ByteTxRx(self.servo_id, 40))
@@ -110,9 +136,11 @@ class Driver:
                                  mode=mode, resolution=resolution, phase=phase,
                                  firmware_min=low, firmware_max=high)
             return self.read()
-        except Exception:
+        except Exception as error:
             self.close()
-            raise
+            if isinstance(error, IOError) and str(error):
+                raise
+            raise IOError(friendly_error(error)) from error
 
     def read(self):
         data = checked(self.packet.readTxRx(self.servo_id, 56, 15))

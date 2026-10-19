@@ -1,4 +1,4 @@
-> **Operator workflow:** Open the app → **START TELEOP** → wait for **READY — PRESS A TO MOVE** → hold A. Release A to stop; **STOP TELEOP** disarms. An existing configured workcell needs no wizard or historical evidence file. Configuration integrity and live robot protections still apply. New or modified workcells require physical validation before operation. See [sway recording and offline analysis](docs/SWAY_DIAGNOSTICS.md).
+> **Operator workflow:** Open the app → **START TELEOP** → wait for **READY — PRESS A TO MOVE** → hold A. Release A to stop; **STOP TELEOP** disarms. When the approved External Control `.urp` is configured, START TELEOP also checks Remote Control, loads/plays it through the UR Dashboard services, and waits for confirmed driver readiness. An existing configured workcell needs no wizard or historical evidence file. Configuration integrity and live robot protections still apply. New or modified workcells require physical validation before operation. See [sway recording and offline analysis](docs/SWAY_DIAGNOSTICS.md).
 
 # UR10e Valve Index teleoperation
 
@@ -68,9 +68,9 @@ After installation, use the existing **UR10e Teleop** desktop shortcut, if insta
 
 1. The managed desktop starts **Live, motion disarmed**, with the motion controller inactive.
 2. On first launch, complete the Initial Setup Wizard with authorized supervision. Thereafter, press **START TELEOP** once with A released.
-3. Follow any pendant instruction to run External Control; wait for **READY — PRESS A TO MOVE**. Controller and Servo preparation happen automatically after their prerequisites.
+3. If `dashboard.remote_program_control_enabled` is configured, the app checks Remote Control, the approved External Control `.urp`, loads/plays it when needed, and waits for confirmed Dashboard and driver readback. Otherwise follow the pendant instruction to run External Control. Then wait for **READY — PRESS A TO MOVE**.
 4. Hold A to move; release A to request a controlled stop.
-5. Press **STOP TELEOP** to clear enable intent. Engineering Preview and the old supervised workflow remain under explicit engineering controls; see [Operation](docs/OPERATION.md).
+5. Press **STOP TELEOP** to clear arm enable intent. **STOP GRIPPER** is separate. **STOP ALL** withdraws both. Closing the app requests a Dashboard program stop before the UR driver is terminated. Engineering Preview and the old supervised workflow remain under explicit engineering controls; see [Operation](docs/OPERATION.md).
 
 
 For tracking alone, without starting the driver or teleoperation:
@@ -95,6 +95,7 @@ source ur_teleop_ws/install/local_setup.bash
 export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=147
 /usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test ur_teleop_ws/src/ur_vr_sim_teleop/test -q
 /usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test/ros_integration_checks.py -q
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/program_dashboard_check.py
 ctest --test-dir ur_teleop_ws/build/ur_vr_bridge --output-on-failure
 ctest --test-dir ur_teleop_ws/build/ur_teleop_controllers --output-on-failure
 ```
@@ -144,8 +145,10 @@ Dashboard status fields and parameter synchronization are documented in the [ope
 
 [V4 implementation, validation, screenshots and rollback](docs/V4_STARTUP_REPORT.md).
 
+[V6 independent gripper, Dashboard program start and ordered shutdown](docs/V6_INDEPENDENCE_REPORT.md).
+
 [Optional commissioning observations and historical setup records](docs/INITIAL_SETUP.md).
 
 ## Optional rack gripper
 
-A separate single-ST3215 subsystem maps the Index analog trigger to saved OPEN/CLOSED encoder endpoints. A remains the arm clutch. Start with [Gripper setup, SDK installation and validation](docs/GRIPPER.md); the unconfigured gripper is disabled and does not block arm-only operation.
+A separate single-ST3215 subsystem maps the Index analog trigger to saved OPEN/CLOSED encoder endpoints. A remains the arm clutch. The gripper has its own session enable, heartbeat and stop controls: **ENABLE GRIPPER** / **STOP GRIPPER** work before START TELEOP, with A released or held, and while the UR driver or External Control program is unavailable. Connect and read diagnostics without a robot connection. Start with [Gripper setup, SDK installation and validation](docs/GRIPPER.md); the unconfigured gripper is disabled and does not block arm-only operation.

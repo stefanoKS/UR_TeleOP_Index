@@ -171,6 +171,41 @@ def test_foreign_stack_is_not_adopted_or_killed(tmp_path):
     assert manager.children == {}
 
 
+def test_program_stop_is_requested_before_process_signals(tmp_path):
+    from ur_vr_teleop.program_control import ProgramStopResult
+    events = []
+    manager = ToyManager(tmp_path/'unused.yaml', root=tmp_path, conflict_check=lambda: [],
+                         program_stop=lambda timeout: events.append('program') or ProgramStopResult('stopped'))
+    original = manager.signal_groups
+    manager.signal_groups = lambda sig, scope=None: (events.append('signal'), original(sig, scope))
+    try:
+        manager.start()
+        manager.stop()
+        assert events[:2] == ['program', 'signal']
+        pump(manager, lambda: not manager.stopping)
+        assert manager.program_stop_result.status == 'stopped'
+    finally:
+        manager.close()
+
+
+def test_driver_failure_keeps_independent_gripper(tmp_path):
+    manager = ToyManager(tmp_path/'unused.yaml', root=tmp_path, conflict_check=lambda: [])
+    try:
+        manager.start()
+        manager.spawn('gripper', [sys.executable, '-c', 'import time; time.sleep(60)'])
+        gripper = manager.children['gripper']
+        manager.children['driver'].terminate()
+        pump(manager, lambda: 'driver' not in manager.children and not manager.stopping)
+        assert gripper.poll() is None
+        assert manager.children.get('gripper') is gripper
+        assert 'gripper' in manager.message.lower()
+    finally:
+        manager.close()
+        if gripper.poll() is None:
+            gripper.kill()
+            gripper.wait()
+
+
 def test_tuned_xacro_changes_only_servoj_parameters(tmp_path):
     import xacro
     from ament_index_python.packages import get_package_share_directory
