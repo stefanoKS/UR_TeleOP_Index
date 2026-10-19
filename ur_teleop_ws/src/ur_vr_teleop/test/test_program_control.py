@@ -29,7 +29,7 @@ def ack(workflow, action, now, value=None, success=True, detail='ok'):
     workflow.acknowledge(action, success, detail, now, value)
 
 
-def reach_loaded(workflow, loaded='external_control.urp', running=False, now=0.):
+def reach_loaded(workflow, loaded='/programs/external_control.urp', running=False, now=0.):
     assert workflow.step(obs(), now) == 'remote'
     ack(workflow, 'remote', now, True)
     assert workflow.step(obs(), now) == 'safety'
@@ -74,7 +74,7 @@ def test_wrong_loaded_program_loads_then_verifies():
     assert workflow.step(obs(), now) == 'load'
     ack(workflow, 'load', now, True)
     assert workflow.step(obs(), now) == 'loaded'            # independent readback
-    ack(workflow, 'loaded', now, 'external_control.urp')
+    ack(workflow, 'loaded', now, '/programs/external_control.urp')
     assert workflow.step(obs(), now) == 'play'              # already known not running
 
 
@@ -208,14 +208,71 @@ def test_existing_enable_intent_blocks_program_start():
 
 
 @pytest.mark.parametrize('loaded,configured,expected', [
-    ('external_control.urp', '/programs/external_control.urp', True),
-    ('/programs/external_control.urp', 'external_control.urp', True),
+    ('/programs/external_control.urp', '/programs/external_control.urp', True),
+    ('/programs/external_control.urp/', '/programs/external_control.urp', True),
+    ('external_control.urp', '/programs/external_control.urp', False),
+    ('/programs/external_control.urp', 'external_control.urp', False),
+    ('/other/external_control.urp', '/programs/external_control.urp', False),
     ('External_Control.urp', 'external_control.urp', False),
     ('', 'external_control.urp', False),
     (None, 'external_control.urp', False),
 ])
 def test_program_identity(loaded, configured, expected):
     assert same_program(loaded, configured) is expected
+
+
+def test_ready_requires_fresh_dashboard_verification():
+    workflow = started()
+    now = reach_loaded(workflow)
+    workflow.step(obs(), now)
+    workflow.acknowledge('play', True, '', now)
+    workflow.step(obs(), now+.3)
+    workflow.acknowledge('running', True, '', now+.3, True)
+    workflow.step(obs(driver_ready=True), now+.4)
+    assert workflow.state == 'READY'
+    assert workflow.verified(now+.4)
+    assert not workflow.verified(now+3.0)      # display must not claim RUNNING
+    assert workflow.monitor_action(now+1.5) == 'running'
+    workflow.acknowledge_monitor('running', True, '', now+1.6, True)
+    assert workflow.verified(now+1.6)
+    assert workflow.monitor_action(now+1.7) is None  # bounded interval
+
+
+def test_dashboard_running_false_moves_program_to_stopped():
+    workflow = started()
+    now = reach_loaded(workflow, running=True)
+    workflow.step(obs(), now)
+    workflow.step(obs(driver_ready=True), now)
+    assert workflow.state == 'READY'
+    action = workflow.monitor_action(now+1.1)
+    assert action == 'running'
+    workflow.acknowledge_monitor(action, True, '', now+1.2, False)
+    assert workflow.state == 'STOPPED'
+    assert not workflow.verified(now+1.3)
+
+
+def test_monitor_identity_change_is_a_fault():
+    workflow = started()
+    now = reach_loaded(workflow, running=True)
+    workflow.step(obs(), now)
+    workflow.step(obs(driver_ready=True), now)
+    assert workflow.state == 'READY'
+    workflow.last_loaded_check_at = -float('inf')
+    action = workflow.monitor_action(now+1.1)
+    assert action == 'loaded'
+    workflow.acknowledge_monitor(action, True, '', now+1.2, '/other/program.urp')
+    assert workflow.state == 'FAILED'
+    assert 'identity changed' in workflow.message
+
+
+def test_monitor_timeout_marks_unverified():
+    workflow = started()
+    now = reach_loaded(workflow, running=True)
+    workflow.step(obs(), now)
+    workflow.step(obs(driver_ready=True), now)
+    assert workflow.monitor_action(now+1.1) == 'running'
+    workflow.acknowledge_monitor('running', False, 'timeout', now+3.2)
+    assert workflow.state == 'UNVERIFIED'
 
 
 def test_config_requires_program_when_enabled(tmp_path):

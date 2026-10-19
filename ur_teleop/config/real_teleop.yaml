@@ -54,6 +54,8 @@ camera:
 # resets safety faults, or unlocks protective stops.
 dashboard:
   remote_program_control_enabled: false
+  # Must match the Dashboard get_loaded_program value exactly after path
+  # normalization; a bare filename does not match a configured directory.
   external_control_program: ""  # e.g. external_control.urp or /programs/....
   timeouts:
     dashboard: 3.0

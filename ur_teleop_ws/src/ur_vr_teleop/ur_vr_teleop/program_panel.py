@@ -37,7 +37,9 @@ class ProgramPanel:
         ttk.Label(body, textvariable=self.status, wraplength=570, justify='left').grid(
             row=5, column=0, columnspan=2, sticky='w')
         ttk.Label(body, text='This panel never loads an unrelated program, unlocks protective stops, '
-                            'changes Remote Control mode, or commands motion.',
+                            'changes Remote Control mode, or commands motion. Enter the exact '
+                            'path/name Dashboard reports; a bare filename is not inferred to match '
+                            'a configured directory.',
                   wraplength=570).grid(row=6, column=0, columnspan=2, sticky='w', pady=8)
         self.future = None
         self.window.protocol('WM_DELETE_WINDOW', self.close)

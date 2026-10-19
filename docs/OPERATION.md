@@ -33,7 +33,7 @@ viewer in a separate window; it is not collision sensing.
 | START TELEOP | Asynchronously prepare the controller, start or recover Servo as needed, request enable, then wait for actual backend arming; a prominent banner names the current stage and blocker |
 | STOP TELEOP | Interrupt arm startup, clear enable intent, and request a software stop; does not stop an independently enabled gripper |
 | ENABLE GRIPPER / STOP GRIPPER | Latched gripper-session follow permission; works before START TELEOP, with A released or held, and without the UR driver or External Control |
-| STOP ALL | Withdraws both arm and gripper motion permission; still a software stop, not an emergency stop |
+| STOP ALL | Withdraws both arm and gripper motion permission; still a software stop, not an emergency stop. Displays pending withdrawal until fresh status confirms both. |
 | Engineering / diagnostics | Explicit Preview/Live selection, managed restart/stop, External Control program identity, individual preparation, optional observations and read-only sway recording |
 | Open RViz / D405 camera | Optional visualization; camera is not collision protection |
 | Apply changes | Submit the edited named settings to the running backend while disarmed with A released |

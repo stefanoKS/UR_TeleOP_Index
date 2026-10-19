@@ -349,6 +349,32 @@ def test_disabled_profile_never_authorizes(worker,tmp_path):
     assert 'not enabled' in worker.snapshot().get('reason','')
 
 
+def test_false_heartbeat_blocks_target_with_authorized_session(worker):
+    engage(worker);drive(worker,1.)
+    count=len(FakeDriver.writes)
+    worker.now[0]+=.04
+    worker.update('heartbeat',False)
+    worker.update('session_enabled',True)
+    worker.update('pose',True);worker.update('optical',True);worker.update('joy',1.)
+    worker.step()
+    assert len(FakeDriver.writes)==count
+    assert worker.snapshot().get('authorized') is False
+
+
+def test_stop_all_withdrawal_blocks_follow_and_requires_fresh_pickup(worker):
+    engage(worker);drive(worker,1.)
+    count=len(FakeDriver.writes)
+    worker.update('heartbeat',False);worker.update('session_enabled',False)
+    drive(worker,1.,enabled=False)
+    assert not worker.follow.active
+    assert len(FakeDriver.writes)==count
+    # A new explicit session enable must not resume the old pickup.
+    worker.update('heartbeat',True);worker.update('session_enabled',True)
+    drive(worker,1.)
+    assert not worker.follow.active
+    assert len(FakeDriver.writes)==count
+
+
 def test_bounded_travel_is_enforced(config):
     for fraction in (-1,0,.5,1,2):
         ticks=target_ticks(fraction,config)

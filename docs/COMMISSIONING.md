@@ -304,9 +304,10 @@ The independent ST3215 package adds mock-worker, actual SDK/pseudo-terminal, ROS
 
 New automated coverage:
 
-- `test_program_control.py`: Remote Control/mode/safety refusal, correct/already-running program, load-then-verify, Play acknowledgment without running readback, duplicate START, late replies after STOP, driver readiness bound, and shutdown ordering.
-- `program_dashboard_check.py`: mocked Humble Dashboard services on an isolated domain exercise the same start sequence plus confirmed/refused Dashboard Stop, with no UR driver or motion.
-- `test_desktop.py`: program stop is requested before process signals; an arm/driver failure stops only arm groups and retains the gripper child.
+- `test_program_control.py`: Remote Control/mode/safety refusal, correct/already-running program, load-then-verify, Play acknowledgment without running readback, duplicate START, late replies after STOP, driver readiness bound, strict program identity, periodic running/identity verification, and shutdown ordering.
+- `test_gripper_control.py`: stop-dominant authorization, pending ENABLE races, late acknowledgments, disable timeouts, unavailable node, repeated STOP/ENABLE, and re-enable only after confirmed stop.
+- `program_dashboard_check.py`: mocked Humble Dashboard services on an isolated domain exercise the same start sequence, continuous running readback, and confirmed/refused Dashboard Stop, with no UR driver or motion.
+- `test_desktop.py`: program stop is requested before process signals; a driver failure retains shared tracking and the gripper; a retained-child start performs one full stop/start without duplication.
 - `test_gripper.py`, `ros_gripper_check.py`, `test_gripper_gui.py`: gripper follow with no arm backend, STOP GRIPPER target withdrawal, duplicate owner, disabled profile, pressed-trigger startup, bounded travel, and STOP ALL.
 
 Run with the documented isolated domain and source overlay:
@@ -320,6 +321,8 @@ export ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=147
 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/program_dashboard_check.py
 /usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/calibration_ros_check.py
 ```
+
+V6.1 stabilization evidence and actual pass counts are recorded in [V6.1 report](V6_1_STABILIZATION_REPORT.md).
 
 ### V6 hardware validation checklist (PENDING unless actually performed)
 

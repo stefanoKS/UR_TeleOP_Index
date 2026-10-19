@@ -24,6 +24,7 @@ from .dashboard_state import (ParameterState, Notifications, equivalent, boolean
                               vector, vector_text, station_text, motion_text)
 from .dashboard_process import ManagerWorker
 from .dashboard_ros import RosDataBridge, RosExecutorThread
+from .gripper_control import GripperControl
 from .program_control import ProgramConfig, ProgramStartup, load_program_config, same_program
 from .startup import Startup
 
@@ -52,8 +53,19 @@ class OperatorGUI:
         self.program = ProgramStartup(self.program_config)
         self.program_request = None
         self.arm_started_for_program = False
+        self.program_incident_handled = False
         self.gripper_request = None
+        self.gripper_requests = []
+        self.gripper_enable_at = None
+        self.gripper_control = GripperControl()
         self.gripper_heartbeat_allowed = True
+        self.stop_all_pending = False
+        self.stop_all_deadline = None
+        self.stop_all_reported = False
+        self.arm_stop_pending = False
+        self.arm_stop_deadline = None
+        self.arm_stop_confirmed = False
+        self.arm_stop_unconfirmed = False
         self.startup_request = None
         self.retiring_startup = False
         self.uncertain_enable_session = None
@@ -529,6 +541,8 @@ class OperatorGUI:
         if not self.process_worker or self.closed:
             return
         if action != 'rviz':self.stop_teleop()
+        if action in ('stop','restart') and not self.wait_for_arm_stop(1.0):
+            self.notify('ARM STOP UNCONFIRMED — proceeding with the managed process stop.',True)
         if self.process_worker.submit(action,mode):
             self.heartbeat.publish(Bool(data=False))
             self.notify('ROS '+action+' requested; waiting for process manager')
@@ -587,6 +601,10 @@ class OperatorGUI:
             self.setup_wizard.window.lift()
 
     def start_teleop(self):
+        if (getattr(self, 'stop_all_pending', False) or getattr(self, 'arm_stop_pending', False)
+                or getattr(getattr(self, 'gripper_control', None), 'state', None) in ('STOPPING','UNCONFIRMED')):
+            self.notify('STOP withdrawal is still being confirmed; wait for confirmation before START.',True)
+            return
         if self.retiring_startup or self.startup_request or self.uncertain_enable_session == self.session and self.session is not None:
             self.notify('Waiting for canceled startup to retire. An enable timeout requires Restart ROS.',True)
             return
@@ -600,11 +618,13 @@ class OperatorGUI:
             self.notify('A robot program start is already in progress.',True)
             return
         if self.program.state=='READY':
-            if not self.stale() and self.last_status.get('robot_preparation_ready') is not True:
-                # The previously confirmed program/driver readiness is gone.
-                # Re-check it explicitly instead of starting arm preparation.
+            if (not self.program.verified(time.monotonic())
+                    or (not self.stale() and self.last_status.get('robot_preparation_ready') is not True)):
+                # The previously confirmed program/driver readiness is gone or
+                # no longer verified.  Re-check it explicitly.
                 self.program.stop()
                 self.arm_started_for_program=False
+                self.program_incident_handled=False
             else:
                 if self.startup.requested:
                     self.notify('Arm preparation is already in progress.',True)
@@ -621,6 +641,7 @@ class OperatorGUI:
                 self.notify('A robot program start is already in progress.',True)
                 return
             self.arm_started_for_program=False
+            self.program_incident_handled=False
             self.heartbeat_allowed=True
             self.session_restart=False
             self.notify('Checking Remote Control and the approved External Control program…')
@@ -636,11 +657,13 @@ class OperatorGUI:
         if program is not None:
             program.stop()
         if getattr(self, 'program_request', None) is not None:
-            action,future,client,_,_=self.program_request
+            action,future,client,_,_,_=self.program_request
             future.cancel()
             client.remove_pending_request(future)
             self.program_request=None
-        self.startup.stop()
+        startup = getattr(self, 'startup', None)
+        if startup is not None:
+            startup.stop()
         # Calibration consent is a separate setup heartbeat; STOP TELEOP
         # withdraws it without changing normal gripper follow authorization.
         if getattr(self, 'gripper_panel', None) is not None and not self.gripper_panel.closed:
@@ -649,27 +672,61 @@ class OperatorGUI:
         # A canceled Future cannot cancel a request already executing at the server.
         # Withhold heartbeat until it retires, then send disarm again.
         self.heartbeat_allowed=False
-        self.heartbeat.publish(Bool(data=False))
-        self.retiring_startup=self.startup_request is not None
-        self.call('disarm')
+        if rclpy.ok():
+            self.heartbeat.publish(Bool(data=False))
+        self.arm_stop_pending=True
+        self.arm_stop_deadline=time.monotonic()+2.
+        self.arm_stop_confirmed=False
+        self.arm_stop_unconfirmed=False
+        self.retiring_startup=getattr(self,'startup_request',None) is not None
+        if hasattr(self, 'call'):
+            self.call('disarm')
 
-    def set_gripper_enabled(self, enabled):
-        """Independent gripper session request; never touches arm enable intent."""
-        if self.gripper_request is not None:
-            self.notify('Gripper request pending; inspect the gripper status.',True)
-            return
+    def _send_gripper_request(self, generation, enabled):
         client = getattr(self, 'gripper_enable_client', None)
+        action = 'enable' if enabled else 'disable'
+        now = time.monotonic()
         if client is None or not client.service_is_ready():
-            self.notify('Gripper process unavailable; inspect the managed stack or its log.',True)
+            self.gripper_control.acknowledge(generation, action, False,
+                                             'gripper process unavailable', now)
+            if hasattr(self, 'notify'):
+                self.notify(self.gripper_control.message, True)
             return
         try:
             future = client.call_async(SetBool.Request(data=bool(enabled)))
         except Exception as error:
-            self.notify('Gripper enable: '+str(error),True)
+            self.gripper_control.acknowledge(generation, action, False, str(error), now)
+            if hasattr(self, 'notify'):
+                self.notify(self.gripper_control.message, True)
             return
-        self.gripper_request=(future,time.monotonic(),client)
-        self.notify('ENABLE GRIPPER requested; waiting for serial status.' if enabled
-                    else 'STOP GRIPPER requested; targets are being withdrawn.')
+        self.gripper_requests.append((action, future, client, generation, now))
+
+    def set_gripper_enabled(self, enabled):
+        """Independent gripper session request; STOP always wins over ENABLE."""
+        now = time.monotonic()
+        if enabled:
+            generation = self.gripper_control.request_enable(now)
+            if generation is None:
+                self.notify(self.gripper_control.message, True)
+                return
+            # Publish at least one true heartbeat before asking the node to
+            # enable, so a late ENABLE from before a STOP is rejected.
+            self.gripper_heartbeat_allowed = True
+            self.gripper_enable_at = now + .15
+            if hasattr(self, 'notify'):
+                self.notify('ENABLE GRIPPER requested; heartbeat restored, awaiting confirmation.')
+            return
+        generation = self.gripper_control.request_disable(now)
+        self.gripper_enable_at = None
+        self.gripper_heartbeat_allowed = False
+        try:
+            if rclpy.ok():
+                self.gripper_heartbeat.publish(Bool(data=False))
+        except Exception:
+            pass
+        OperatorGUI._send_gripper_request(self, generation, False)
+        if hasattr(self, 'notify'):
+            self.notify(self.gripper_control.message)
 
     def stop_all(self):
         """Withdraw arm and gripper motion permissions; still a software stop."""
@@ -678,7 +735,47 @@ class OperatorGUI:
         if getattr(self,'gripper_panel',None) is not None and not self.gripper_panel.closed:
             self.gripper_panel.authorized.set(False)
             self.gripper_panel.publisher.publish(Bool(data=False))
-        self.notify('STOP ALL: arm and gripper authorization withdrawn. Use the pendant for emergencies.')
+        self.stop_all_pending = True
+        self.stop_all_deadline = time.monotonic()+3.
+        self.stop_all_reported = False
+        self.notify('STOP ALL requested: confirming arm and gripper withdrawal; '
+                    'heartbeats are withheld until confirmation.')
+
+    def observe_arm_stop(self, now):
+        if not self.arm_stop_pending:
+            return
+        fresh = not self.stale()
+        status = self.last_status if fresh else {}
+        if fresh and status.get('enable_requested') is False and status.get('armed') is False:
+            self.arm_stop_pending = False
+            self.arm_stop_confirmed = True
+            self.arm_stop_unconfirmed = False
+            return
+        if self.arm_stop_deadline is not None and now >= self.arm_stop_deadline:
+            self.arm_stop_pending = False
+            self.arm_stop_confirmed = False
+            self.arm_stop_unconfirmed = True
+            self.notify('ARM STOP UNCONFIRMED — backend status did not confirm disarm.', True)
+
+    def poll_stop_all(self, now):
+        if not self.stop_all_pending or self.stop_all_reported:
+            return
+        if self.arm_stop_pending or self.gripper_control.busy:
+            if now < self.stop_all_deadline:
+                return
+        self.stop_all_pending = False
+        self.stop_all_reported = True
+        if self.arm_stop_confirmed and self.gripper_control.confirmed_disabled:
+            self.notify('STOP ALL confirmed: arm and gripper authorization withdrawn.')
+            return
+        reasons = []
+        if self.arm_stop_unconfirmed:
+            reasons.append('arm stop unconfirmed')
+        if self.gripper_control.unconfirmed:
+            reasons.append('gripper stop unconfirmed')
+        if not reasons:
+            reasons.append('withdrawal confirmation incomplete')
+        self.notify('STOP ALL incomplete: ' + '; '.join(reasons), True)
 
     def program_observations(self):
         stale=self.stale(); d=self.last_status if not stale else {}
@@ -696,8 +793,9 @@ class OperatorGUI:
 
     def poll_program(self, now):
         if self.program_request is not None:
-            action,future,client,generation,started=self.program_request
-            if not future.done() and now < (self.program.deadline or started+5.):
+            action,future,client,generation,started,monitor=self.program_request
+            deadline = (self.program.monitor_deadline if monitor else self.program.deadline) or started+5.
+            if not future.done() and now < deadline:
                 return
             self.program_request=None
             if generation != self.program.generation:
@@ -709,26 +807,40 @@ class OperatorGUI:
             if not future.done():
                 future.cancel()
                 client.remove_pending_request(future)
-                self.program.acknowledge(action,False,'service timeout; outcome unknown',now)
-                return
-            try:
-                result=future.result()
-                if action=='remote': ok,value,detail=bool(result.success),bool(result.remote_control),result.answer
-                elif action=='safety': ok,value,detail=bool(result.success),int(result.safety_mode.mode),result.answer
-                elif action=='mode': ok,value,detail=bool(result.success),int(result.robot_mode.mode),result.answer
-                elif action=='loaded': ok,value,detail=bool(result.success),result.program_name,result.answer
-                elif action=='running': ok,value,detail=bool(result.success),bool(result.program_running),result.answer
-                elif action=='load': ok,value,detail=bool(result.success),True,result.answer
-                else: ok,value,detail=bool(result.success),True,result.message
-            except Exception as error:
-                self.program.acknowledge(action,False,str(error),now)
-                return
-            self.program.acknowledge(action,ok,detail,now,value)
+                if monitor:
+                    self.program.acknowledge_monitor(action,False,'service timeout',now)
+                else:
+                    self.program.acknowledge(action,False,'service timeout; outcome unknown',now)
+            else:
+                try:
+                    result=future.result()
+                    if action=='remote': ok,value,detail=bool(result.success),bool(result.remote_control),result.answer
+                    elif action=='safety': ok,value,detail=bool(result.success),int(result.safety_mode.mode),result.answer
+                    elif action=='mode': ok,value,detail=bool(result.success),int(result.robot_mode.mode),result.answer
+                    elif action=='loaded': ok,value,detail=bool(result.success),result.program_name,result.answer
+                    elif action=='running': ok,value,detail=bool(result.success),bool(result.program_running),result.answer
+                    elif action=='load': ok,value,detail=bool(result.success),True,result.answer
+                    else: ok,value,detail=bool(result.success),True,result.message
+                except Exception as error:
+                    if monitor:
+                        self.program.acknowledge_monitor(action,False,str(error),now)
+                    else:
+                        self.program.acknowledge(action,False,str(error),now)
+                    return
+                if monitor:
+                    self.program.acknowledge_monitor(action,ok,detail,now,value)
+                else:
+                    self.program.acknowledge(action,ok,detail,now,value)
         action=self.program.step(self.program_observations(),now)
+        if action is None and self.program.state=='READY' and self.program_request is None:
+            action=self.program.monitor_action(now)
         if action and self.program_request is None:
             client=self.dashboard.get(action)
             if client is None or not client.service_is_ready():
-                self.program.acknowledge(action,False,action+' Dashboard service unavailable',now)
+                if self.program.state=='READY':
+                    self.program.acknowledge_monitor(action,False,action+' Dashboard service unavailable',now)
+                else:
+                    self.program.acknowledge(action,False,action+' Dashboard service unavailable',now)
                 return
             try:
                 request={'remote':IsInRemoteControl.Request(),'safety':GetSafetyMode.Request(),
@@ -737,41 +849,62 @@ class OperatorGUI:
                     'load':Load.Request(filename=self.program_config.program)}[action]
                 future=client.call_async(request)
             except Exception as error:
-                self.program.acknowledge(action,False,str(error),now)
+                if self.program.state=='READY':
+                    self.program.acknowledge_monitor(action,False,str(error),now)
+                else:
+                    self.program.acknowledge(action,False,str(error),now)
                 return
-            self.program_request=(action,future,client,self.program.generation,now)
-        if self.program.state=='READY' and not self.arm_started_for_program:
+            monitor = self.program.state=='READY'
+            self.program_request=(action,future,client,self.program.generation,now,monitor)
+        if self.program.state=='READY' and self.program.verified(now) and not self.arm_started_for_program:
             self.arm_started_for_program=True
+            self.program_incident_handled=False
             if self.startup.start(self.session):
                 self.heartbeat_allowed=True
                 self.session_restart=False
-            self.notify('External Control running; preparing the arm.')
-        if self.program.state=='FAILED':
-            generation=getattr(self,'program_failure_generation',None)
-            if generation != self.program.generation:
-                self.program_failure_generation=self.program.generation
-                self.heartbeat_allowed=False
-                if rclpy.ok():
-                    self.heartbeat.publish(Bool(data=False))
-                self.call('disarm')
-                self.notify(self.program.message,True)
+            self.notify('External Control running and verified; preparing the arm.')
+        if self.program.state in ('FAILED','UNVERIFIED','STOPPED') and not getattr(self,'program_incident_handled',False):
+            self.program_incident_handled=True
+            self.arm_started_for_program=False
+            self.heartbeat_allowed=False
+            if rclpy.ok():
+                self.heartbeat.publish(Bool(data=False))
+            self.startup.stop()
+            self.call('disarm')
+            self.notify(self.program.message,True)
 
-    def poll_gripper_request(self, now):
-        if self.gripper_request is None:
-            return
-        future,started,client=self.gripper_request
-        if not future.done() and now-started<2.:
-            return
-        self.gripper_request=None
-        if not future.done():
-            future.cancel();client.remove_pending_request(future)
-            self.notify('Gripper enable: service timeout; inspect /gripper/status.',True)
-            return
-        try:
-            result=future.result()
-            self.notify(result.message,not result.success)
-        except Exception as error:
-            self.notify('Gripper enable: '+str(error),True)
+    def poll_gripper_requests(self, now):
+        if self.gripper_enable_at is not None and now >= self.gripper_enable_at:
+            generation = self.gripper_control.generation
+            self.gripper_enable_at = None
+            if self.gripper_control.state == 'ENABLING':
+                OperatorGUI._send_gripper_request(self, generation, True)
+        for item in list(self.gripper_requests):
+            action, future, client, generation, started = item
+            if generation != self.gripper_control.generation:
+                # STOP retired this request; a late reply cannot re-enable.
+                future.cancel()
+                client.remove_pending_request(future)
+                self.gripper_requests.remove(item)
+                continue
+            if not future.done() and now - started < self.gripper_control.timeout:
+                continue
+            self.gripper_requests.remove(item)
+            if not future.done():
+                future.cancel()
+                client.remove_pending_request(future)
+                self.gripper_control.expire(generation, action, now)
+                self.notify(self.gripper_control.message, True)
+                continue
+            try:
+                result = future.result()
+                self.gripper_control.acknowledge(
+                    generation, action, bool(result.success), result.message, now)
+                self.notify(self.gripper_control.message, not result.success)
+            except Exception as error:
+                self.gripper_control.acknowledge(generation, action, False, str(error), now)
+                self.notify(self.gripper_control.message, True)
+        self.gripper_heartbeat_allowed = self.gripper_control.heartbeat_allowed
 
     def poll_startup(self, now):
         request=self.startup_request
@@ -1008,6 +1141,15 @@ class OperatorGUI:
                 self.set_banner('DISCONNECTED — WAITING FOR BACKEND',
                                 'No fresh backend status. Do not infer robot state; check the pendant.',COLORS['muted'])
             for key in self.readiness:self.set_ready(key,None,'Unknown / status unavailable')
+            manager_text = str(getattr(self, 'stack_status', None).get()) if getattr(self, 'stack_status', None) else ''
+            if 'ROBOT FAULT' in manager_text:
+                gd = self.gripper_data if time.monotonic()-self.gripper_at < .5 else {}
+                available = (bool(gd) and gd.get('connection') == 'Connected'
+                             and gd.get('feedback_valid') is True and gd.get('input_fresh') is True
+                             and gd.get('authorized') is True)
+                self.set_banner('ROBOT FAULT — GRIPPER AVAILABLE' if available else 'ROBOT FAULT',
+                                'Arm stack stopped; inspect the displayed gripper status.',COLORS['red'])
+                self.header_state.set('FAULT')
             return
         mode=str(d.get('mode','UNKNOWN'))
         self.stack_status.set('Live stack connected' if mode.startswith('LIVE') else 'Engineering Preview connected')
@@ -1056,13 +1198,18 @@ class OperatorGUI:
         robot=boolean(d,'robot_preparation_ready')
         robot_fault=boolean(d,'robot_fault') is True
         self.set_ready('robot',robot,'ROBOT: FAULT' if robot_fault else 'ROBOT: READY' if robot is True else 'ROBOT: WAITING')
-        program_ok=(True if self.program.state=='READY' else False if self.program.state=='FAILED'
-                    else None)
+        now = time.monotonic()
+        program_verified = self.program.verified(now)
+        program_ok=(True if program_verified else
+                    False if self.program.state in ('FAILED','UNVERIFIED','STOPPED') else None)
         if not self.program_config.enabled:
             program_text='PROGRAM: MANUAL — configure the approved External Control .urp'
             program_ok=None
         else:
-            program_text=('PROGRAM: RUNNING' if self.program.state=='READY' else
+            program_text=('PROGRAM: RUNNING (verified)' if program_verified else
+                          'PROGRAM: VERIFYING — Dashboard readback required' if self.program.state=='READY' else
+                          'PROGRAM: UNVERIFIED' if self.program.state=='UNVERIFIED' else
+                          'PROGRAM: STOPPED' if self.program.state=='STOPPED' else
                           'PROGRAM: FAULT' if self.program.state=='FAILED' else
                           'PROGRAM: '+str(self.program.stage))
         self.set_ready('program',program_ok,program_text)
@@ -1072,16 +1219,32 @@ class OperatorGUI:
                             str(failure.get('message',self.program.message))
                             +(' — '+str(failure.get('hint')) if failure.get('hint') else ''),COLORS['red'])
             self.header_state.set('FAULT')
+        elif self.program.state in ('UNVERIFIED','STOPPED'):
+            self.set_banner('PROGRAM ' + self.program.state,
+                            self.program.message,COLORS['red'] if self.program.state=='UNVERIFIED' else COLORS['amber'])
+            self.header_state.set('PROGRAM ' + self.program.state)
         elif self.program.busy:
             self.set_banner(self.program.stage,self.program.message)
             self.header_state.set(self.program.stage)
-        if robot_fault:self.header_state.set('FAULT')
+        if robot_fault:
+            self.header_state.set('FAULT')
+            # "Available" requires fresh, authoritative gripper state, not
+            # merely a retained process.
+            gd = self.gripper_data if now-self.gripper_at < .5 else {}
+            available = (bool(gd) and gd.get('connection') == 'Connected'
+                         and gd.get('feedback_valid') is True and gd.get('input_fresh') is True
+                         and gd.get('authorized') is True)
+            if available:
+                self.set_banner('ROBOT FAULT — GRIPPER AVAILABLE',
+                                'Arm processes stopped; tracking and gripper remained healthy.',COLORS['red'])
         if self.startup.requested or self.startup.state=='ERROR' or not self.heartbeat_allowed:
             self.live_message.set(self.startup.message)
-        if self.program.busy or self.program.state=='FAILED':
+        if self.program.busy or self.program.state in ('FAILED','UNVERIFIED','STOPPED'):
             self.live_message.set(self.program.message)
-        if self.program.state=='FAILED' or self.program.busy:
-            pass  # Program stage/fault banner set above; arm startup is not running yet.
+        if self.program.state in ('FAILED','UNVERIFIED','STOPPED') or self.program.busy:
+            pass  # Program fault/verification banner set above.
+        elif robot_fault:
+            pass  # Robot fault/gripper-available banner set above.
         elif self.startup.state=='ERROR':
             failure=self.startup.last_failure or {}
             detail=str(failure.get('message','Startup failed'))
@@ -1101,6 +1264,11 @@ class OperatorGUI:
             self.set_banner('DISARMED — PRESS START TELEOP','')
         if not fault and not robot_fault and self.startup.enabled and tracking is False:
             self.header_state.set('TRACKING LOST')
+        if getattr(self, 'stop_all_pending', False):
+            self.set_banner('STOP ALL — CONFIRMING WITHDRAWAL',
+                            'Arm and gripper heartbeats are withheld until status readback confirms.',
+                            COLORS['amber'])
+            self.header_state.set('STOP ALL')
         self.motion.set(motion_text(d))
 
     def poll(self):
@@ -1117,18 +1285,24 @@ class OperatorGUI:
             except queue.Empty:pass
         self.record_status.set(self.recorder.poll())
         now=time.monotonic()
+        gd = self.gripper_data if now-self.gripper_at < .5 else {}
+        fresh_gripper = bool(gd) and now-self.gripper_at < .5
+        if self.gripper_control.observe(gd, fresh_gripper, now, self.gripper_at):
+            self.notify(self.gripper_control.message, not self.gripper_control.confirmed_disabled)
+        self.gripper_heartbeat_allowed = self.gripper_control.heartbeat_allowed
+        self.observe_arm_stop(now)
         if now-self.heartbeat_at>=.1:
             self.heartbeat.publish(Bool(data=self.heartbeat_allowed));self.heartbeat_at=now
-            self.gripper_heartbeat.publish(Bool(data=self.gripper_heartbeat_allowed))
+            self.gripper_heartbeat.publish(Bool(data=self.gripper_control.heartbeat_allowed))
         self.finish_requests()
         self.check_readback(now)
-        self.poll_gripper_request(now)
+        self.poll_gripper_requests(now)
         self.poll_program(now)
-        if not self.program_config.enabled or self.program.state=='READY':
+        self.poll_stop_all(now)
+        if not self.program_config.enabled or self.program.verified(now):
             self.poll_startup(now)
         if self.setup_wizard is not None:
             self.setup_wizard.poll()
-        gd = self.gripper_data if now-self.gripper_at < .5 else {}
         gf = gd.get('feedback', {}) if gd.get('feedback_valid') else {}
         fraction = gd.get('normalized_trigger')
         percent = f'{fraction*100:.0f}%' if isinstance(fraction, (float, int)) else '—'
@@ -1137,12 +1311,15 @@ class OperatorGUI:
         trigger_state = 'following' if gd.get('following') else 'pickup required'
         session = 'ENABLED' if gd.get('session_enabled') else 'not enabled'
         authorization = 'AUTHORIZED' if gd.get('authorized') else 'not authorized'
+        control = getattr(self, 'gripper_control', None)
+        control_state = control.state if control is not None else 'UNAVAILABLE'
+        control_message = control.message if control is not None else 'Gripper control unavailable'
         self.gripper_text.set(
             f"{gd.get('connection', 'Disconnected')} · ST3215 ID {gd.get('identity', {}).get('servo_id', '—')}\n"
             f"Encoder {gf.get('ticks', '—')} ticks · Motor {gf.get('motor_status', '—')} · {gf.get('temperature_c', '—')} °C\n"
             f"Trigger {percent} · Desired {desired} · Target {gd.get('commanded_ticks', '—')}"
             f" · {trigger_state}\nSession: {session} · {authorization} · {gd.get('status', 'Unavailable')}\n"
-            f"{str(gd.get('reason', ''))[:180]}")
+            f"Control: {control_state} — {control_message}\n{str(gd.get('reason', ''))[:160]}")
         self.camera_status.set(self.camera_text if now-self.camera_at<4 else 'D405 unavailable / no recent status (teleop unaffected)')
         stale,d=self.stale(),self.last_status
         self.update_dashboard(stale,d)
@@ -1155,9 +1332,13 @@ class OperatorGUI:
         self.reset_button.state(['disabled'] if self.parameters.pending else ['!disabled'])
         self.enable_button.state(['disabled'] if self.program.busy or self.startup.requested or self.retiring_startup or self.startup_request else ['!disabled'])
         self.enable_button.configure(text='START TELEOP')
-        gripper_busy=getattr(self,'gripper_request',None) is not None
-        self.gripper_enable_button.state(['disabled'] if gripper_busy else ['!disabled'])
-        self.gripper_stop_button.state(['disabled'] if gripper_busy else ['!disabled'])
+        control = getattr(self, 'gripper_control', None)
+        gripper_busy = (control.busy if control is not None else False) or bool(
+            getattr(self, 'gripper_requests', []))
+        allow_enable = control.allow_enable if control is not None else False
+        self.gripper_enable_button.state(['disabled'] if not allow_enable else ['!disabled'])
+        # STOP is always available; repeated STOP requests are safe.
+        self.gripper_stop_button.state(['!disabled'])
         self.servo_button.state(['disabled'] if stale or d.get('armed') or self.request_busy('servo') or self.startup.requested else ['!disabled'])
         self.prepare_button.state(['disabled'] if disabled or d.get('enable_requested') or busy or self.startup.requested else ['!disabled'])
         hardware=d.get('hardware_smoothing') if not stale else None
@@ -1170,31 +1351,83 @@ class OperatorGUI:
             self.blockers.configure(state='normal');self.blockers.delete('1.0','end');self.blockers.insert('end',text);self.blockers.configure(state='disabled')
         self.root.after(100,self.poll)
 
+    def wait_for_arm_stop(self, timeout=2.0):
+        """Bounded readback wait used before Dashboard program shutdown."""
+        bridge = getattr(self, 'ros_data', None)
+        if bridge is None:
+            self.arm_stop_pending = False
+            self.arm_stop_confirmed = False
+            self.arm_stop_unconfirmed = True
+            return False
+        until = time.monotonic()+timeout
+        while time.monotonic() < until:
+            status, received = bridge.peek('status')
+            now = time.monotonic()
+            if (isinstance(status, dict) and now-received < .5
+                    and status.get('enable_requested') is False and status.get('armed') is False):
+                self.arm_stop_pending = False
+                self.arm_stop_confirmed = True
+                self.arm_stop_unconfirmed = False
+                return True
+            time.sleep(.02)
+        self.arm_stop_pending = False
+        self.arm_stop_confirmed = False
+        self.arm_stop_unconfirmed = True
+        return False
+
+    def wait_for_gripper_stop(self, timeout=.8):
+        bridge = getattr(self, 'ros_data', None)
+        control = getattr(self, 'gripper_control', None)
+        if bridge is None or control is None:
+            return True
+        until = time.monotonic()+timeout
+        while time.monotonic() < until:
+            OperatorGUI.poll_gripper_requests(self, time.monotonic())
+            data, received = bridge.peek('gripper')
+            now = time.monotonic()
+            if (isinstance(data, dict) and now-received < .5
+                    and data.get('session_enabled') is False and data.get('authorized') is False):
+                control.observe(data, True, now, received)
+                self.gripper_heartbeat_allowed = control.heartbeat_allowed
+                return True
+            if control.unconfirmed:
+                return False
+            time.sleep(.02)
+        if control.state == 'STOPPING':
+            control.expire(control.generation, 'disable', time.monotonic())
+        return False
+
     def close(self):
         if self.closed:return
         self.closed=True
         try:
             if getattr(self,'setup_wizard',None) is not None:self.setup_wizard.close(stop=False)
-            # Withdraw both motion permissions before ROS services disappear.
+            if getattr(self,'gripper_control',None) is None:
+                self.gripper_control=GripperControl()
+            if not hasattr(self,'gripper_requests'):
+                self.gripper_requests=[]
+            if not hasattr(self,'gripper_enable_at'):
+                self.gripper_enable_at=None
+            # Withdraw arm intent first, then wait for authoritative disarmed
+            # readback before the manager initiates Dashboard program shutdown.
             try:
                 self.stop_teleop()
             except Exception:
                 pass
-            self.gripper_heartbeat_allowed=False
+            if not OperatorGUI.wait_for_arm_stop(self, 2.0) and hasattr(self, 'notify'):
+                self.notify('ARM STOP UNCONFIRMED — Dashboard shutdown will still proceed.', True)
+            # Withdraw the gripper heartbeat immediately and request disable,
+            # even if an ENABLE request is still in flight.
             try:
-                if rclpy.ok():self.gripper_heartbeat.publish(Bool(data=False))
+                OperatorGUI.set_gripper_enabled(self, False)
             except Exception:
-                pass
-            try:
-                if rclpy.ok() and self.gripper_enable_client.service_is_ready():
-                    future=self.gripper_enable_client.call_async(SetBool.Request(data=False))
-                    until=time.monotonic()+.5
-                    while not future.done() and time.monotonic()<until:
-                        time.sleep(.01)
-                    if not future.done():
-                        future.cancel();self.gripper_enable_client.remove_pending_request(future)
-            except Exception:
-                pass
+                self.gripper_heartbeat_allowed = False
+            if not OperatorGUI.wait_for_gripper_stop(self, .8) and hasattr(self, 'notify'):
+                self.notify('GRIPPER STOP UNCONFIRMED — heartbeat remains withdrawn.', True)
+            self.gripper_heartbeat_allowed = False
+            for action, future, client, generation, started in list(getattr(self, 'gripper_requests', [])):
+                future.cancel();client.remove_pending_request(future)
+            self.gripper_requests = []
             if getattr(self,'recorder', None):
                 import threading
                 threading.Thread(target=self.recorder.close, name='recorder-shutdown', daemon=False).start()
@@ -1203,14 +1436,14 @@ class OperatorGUI:
                 _,future,client,_,_=self.startup_request
                 future.cancel();client.remove_pending_request(future)
             if getattr(self,'program_request',None):
-                _,future,client,_,_=self.program_request
+                _,future,client,_,_,_=self.program_request
                 future.cancel();client.remove_pending_request(future)
             if getattr(self,'process_worker',None):self.process_worker.close()
             if hasattr(self,'request_meta'):self.cancel_requests()
             if getattr(self,'gripper_panel',None) is not None:self.gripper_panel.close()
             if getattr(self,'program_panel',None) is not None:self.program_panel.close()
             if getattr(self,'camera_window',None) is not None:self.camera_window.close()
-            if rclpy.ok():self.heartbeat.publish(Bool(data=False))
+            if rclpy.ok():self.heartbeat.publish(Bool(data=False));self.gripper_heartbeat.publish(Bool(data=False))
             if getattr(self,'ros_executor',None):
                 self.ros_executor.close()
                 self.ros_executor.join()

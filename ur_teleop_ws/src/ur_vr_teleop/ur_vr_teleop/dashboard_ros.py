@@ -52,6 +52,12 @@ class RosDataBridge:
             self._latest.clear()
         return sorted({item[0]: item for item in items}.values())
 
+    def peek(self, kind):
+        """Latest value without consuming it (safe for bounded close waits)."""
+        with self._lock:
+            item = self._latest.get(kind)
+            return (item[2], item[3]) if item is not None else (None, -float('inf'))
+
 
 class LatestValue:
     """Bounded one-value mailbox for high-rate optional telemetry."""

@@ -38,18 +38,21 @@ def run():
             ('optical',Bool,'/vr/controller/optical_fresh'),
             ('heartbeat',Bool,'/gripper/operator_present')]}
         enable=fixture.create_client(SetBool,'/gripper/set_enabled')
-        state=dict(raw=.5,enabled=False,valid=True,stale=False)
+        state=dict(raw=.5,enabled=False,valid=True,stale=False,heartbeat=True)
         latest={}
         fixture.create_subscription(String,'/gripper/status',lambda msg:latest.update(json.loads(msg.data)),1)
-        def set_enabled(value):
+        def set_enabled(value,expect=True):
             deadline=time.monotonic()+2
             while not enable.service_is_ready() and time.monotonic()<deadline:ex.spin_once(timeout_sec=.01)
             future=enable.call_async(SetBool.Request(data=value))
             while not future.done() and time.monotonic()<deadline:ex.spin_once(timeout_sec=.01)
-            assert future.done() and future.result().success, latest
+            assert future.done(), latest
+            result=future.result()
+            assert result.success is expect, (result.message, latest)
+            return result
         def publish():
             pubs['pose'].publish(Bool(data=state['valid']));pubs['optical'].publish(Bool(data=state['valid']))
-            pubs['heartbeat'].publish(Bool(data=True))
+            pubs['heartbeat'].publish(Bool(data=state['heartbeat']))
             msg=Joy();msg.header.stamp=fixture.get_clock().now().to_msg()
             if state['stale']:msg.header.stamp.sec-=1
             msg.axes=[0.,state['raw'] if state['valid'] else 0.];msg.buttons=[0]*16
@@ -76,8 +79,14 @@ def run():
             assert len(FakeDriver.writes)==count and not latest.get('input_fresh')
             set_enabled(False);state.update(stale=False,enabled=False);pump(.2)
             assert len(FakeDriver.writes)==count
+            # A late ENABLE after the heartbeat withdrawal must be rejected.
+            state['heartbeat']=False;pump(.35)
+            rejected=set_enabled(True,expect=False)
+            assert 'heartbeat' in rejected.message.lower(), rejected.message
+            state['heartbeat']=True;pump(.25)
+            set_enabled(True);set_enabled(False)
             assert not node.get_publishers_info_by_topic('/scaled_joint_trajectory_controller/joint_trajectory')
-            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP; no arm publisher')
+            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP, heartbeat-gated enable; no arm publisher')
         finally:
             ex.remove_node(node);node.destroy_node();fixture.destroy_node();ex.shutdown();rclpy.shutdown()
 

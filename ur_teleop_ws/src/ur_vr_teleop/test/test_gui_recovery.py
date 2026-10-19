@@ -25,6 +25,23 @@ def test_closed_ros_context_still_closes_window(monkeypatch):
     p.root.destroy.assert_called_once()
 
 
+def test_arm_stop_confirmation_uses_authoritative_status():
+    p = SimpleNamespace(ros_data=Mock(), arm_stop_pending=True, arm_stop_confirmed=False,
+                        arm_stop_unconfirmed=False, arm_stop_deadline=None)
+    p.ros_data.peek.return_value = (
+        {'enable_requested': False, 'armed': False}, time.monotonic())
+    assert OperatorGUI.wait_for_arm_stop(p, .1)
+    assert p.arm_stop_confirmed and not p.arm_stop_unconfirmed
+
+
+def test_arm_stop_timeout_is_reported_unconfirmed():
+    p = SimpleNamespace(ros_data=Mock(), arm_stop_pending=True, arm_stop_confirmed=False,
+                        arm_stop_unconfirmed=False, arm_stop_deadline=None)
+    p.ros_data.peek.return_value = (None, -float('inf'))
+    assert not OperatorGUI.wait_for_arm_stop(p, .05)
+    assert p.arm_stop_unconfirmed and not p.arm_stop_confirmed
+
+
 def panel():
     return SimpleNamespace(last_status_at=time.monotonic(), last_status={
         'mode': 'LIVE OUTPUT', 'armed': False, 'a_held': False, 'enable_requested': False,

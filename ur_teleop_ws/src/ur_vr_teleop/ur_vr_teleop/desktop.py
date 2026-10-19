@@ -219,8 +219,15 @@ class ProcessManager:
                 self.manifest.unlink(missing_ok=True)
 
     def start(self, live=False):
-        if self.children or self.stopping:
+        if self.stopping:
             raise RuntimeError('Stop the managed stack before starting another')
+        if self.children:
+            # Retained shared/peripheral processes (tracking, gripper) must not
+            # be duplicated.  Perform one reliable full stop/start instead.
+            self.message = ('Retained shared processes present; stopping the full owned stack '
+                            'before a fresh restart.')
+            self.stop(restart=bool(live))
+            return
         if self.recover_abandoned(live):
             return
         conflicts = self.conflict_check()
@@ -386,18 +393,30 @@ class ProcessManager:
             failed = [name for name, p in self.children.items() if name not in ('rviz', 'camera', 'gripper') and p.poll() is not None]
             if failed:
                 reasons = ', '.join(f'{name}(exit {self.children[name].returncode})' for name in failed)
-                self.message = ('Process exited: ' + reasons + '. Robot stack stopped; the independent '
-                                'gripper process is retained. Logs: ' + str(self.directory)
+                scope = {'driver', 'teleop', 'rviz'}
+                tracking_failed = 'tracking' in failed
+                if tracking_failed:
+                    scope.add('tracking')
+                detail = ('Tracking also stopped; gripper retained for read-only diagnostics.'
+                          if tracking_failed else
+                          'Tracking and gripper retained; verify fresh GRIPPER status in the dashboard.')
+                self.message = ('ROBOT FAULT — ' + detail + ' Process exited: ' + reasons
+                                + '. Logs: ' + str(self.directory)
                                 + '.' + self.record_crash(failed) + ' Inspect the failing component, then use Restart ROS.')
-                # Stop only arm/servo/tracking groups.  The gripper keeps its
-                # serial ownership and remains diagnosable without the driver.
-                self.stop(scope={'driver', 'teleop', 'tracking', 'rviz'}, program_timeout=1.0)
+                # The arm subsystem is stopped.  The shared tracking bridge is
+                # preserved on a driver/teleop fault so independent gripper
+                # trigger following can continue with valid tracking.
+                self.stop(scope=scope, program_timeout=1.0)
             else:
                 failure = self.child_log_failure()
                 if failure:
-                    self.message = ('ROS child failed; robot stack stopped, gripper retained. ' + failure
-                                    + '.' + self.record_crash([failure.split(':', 1)[0]]))
-                    self.stop(scope={'driver', 'teleop', 'tracking', 'rviz'}, program_timeout=1.0)
+                    failed_name = failure.split(':', 1)[0]
+                    scope = {'driver', 'teleop', 'rviz'}
+                    if failed_name == 'tracking':
+                        scope.add('tracking')
+                    self.message = ('ROS child failed; arm stack stopped, gripper retained. ' + failure
+                                    + '.' + self.record_crash([failed_name]))
+                    self.stop(scope=scope, program_timeout=1.0)
                 else:
                     for name in ('gripper', 'camera', 'rviz'):
                         process = self.children.get(name)

@@ -197,6 +197,16 @@ def main():
         assert drive(workflow, node, service_clients, True) == 'READY'
         assert server.play_calls == 0
 
+        # READY is periodically re-verified; an externally stopped program is
+        # no longer displayed as RUNNING.
+        server.running = False
+        action = workflow.monitor_action(time.monotonic() + 1.1)
+        assert action == 'running', action
+        result = call(node, service_clients['running'], IsProgramRunning.Request())
+        workflow.acknowledge_monitor(action, result.success, result.answer,
+                                     time.monotonic(), result.program_running)
+        assert workflow.state == 'STOPPED', workflow.state
+
         # Local Control -> refusal, no Play.
         server.play_calls = 0; server.remote = False; server.running = False
         workflow = ProgramStartup(config); assert workflow.start(0)

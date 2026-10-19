@@ -50,6 +50,7 @@ class GripperNode(Node):
         self.flag_times = {'pose': -float('inf'), 'optical': -float('inf')}
         self.flags = {'pose': False, 'optical': False}
         self.auto_connect = True
+        self.heartbeat_at = -float('inf')
         self.trigger_min = self.trigger_max = None
         self.last_feedback = self.last_command = None
         self.state_pub = self.create_publisher(String, '/gripper/status', 1)
@@ -113,13 +114,20 @@ class GripperNode(Node):
         self.flag('optical', msg, info)
 
     def heartbeat(self, msg, info):
-        self.worker.update('heartbeat', msg.data and self.source_fresh(info))
+        value = msg.data and self.source_fresh(info)
+        self.heartbeat_at = time.monotonic() if value else -float('inf')
+        self.worker.update('heartbeat', value)
 
     def calibration(self, msg, info):
         self.worker.update('calibration', msg.data and self.source_fresh(info))
 
     def set_enabled(self, request, response):
         """Session authorization is independent of arm teleoperation."""
+        if request.data and time.monotonic() - self.heartbeat_at >= .25:
+            response.success = False
+            response.message = ('Gripper heartbeat is withdrawn; ENABLE requires a fresh '
+                                'operator heartbeat. Press ENABLE again after the GUI reconnects.')
+            return response
         if request.data:
             try:
                 config = load(self.worker.path)

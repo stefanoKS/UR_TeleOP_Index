@@ -152,14 +152,33 @@ def test_managed_start_restart_and_stop_do_not_touch_unowned_processes(tmp_path)
         manager.close()
 
 
-def test_child_failure_stops_stack_without_auto_restarting(tmp_path):
+def test_driver_failure_stops_arm_but_keeps_shared_tracking(tmp_path):
     manager = ToyManager(tmp_path/'unused.yaml', root=tmp_path, conflict_check=lambda: [])
     try:
         manager.start()
+        tracker = manager.children['tracking']
         manager.children['driver'].terminate()
-        pump(manager, lambda: not manager.children)
-        assert 'Process exited' in manager.message
+        pump(manager, lambda: 'driver' not in manager.children and not manager.stopping)
+        assert manager.children.get('tracking') is tracker
+        assert tracker.poll() is None
+        assert 'ROBOT FAULT' in manager.message
         assert manager.restart_mode is None
+    finally:
+        manager.close()
+
+
+def test_start_with_retained_children_does_not_duplicate_stack(tmp_path):
+    manager = ToyManager(tmp_path/'unused.yaml', root=tmp_path, conflict_check=lambda: [])
+    try:
+        manager.start()
+        old = {name: p.pid for name, p in manager.children.items()}
+        manager.spawn('gripper', [sys.executable, '-c', 'import time; time.sleep(60)'])
+        manager.start()  # retained children -> one full stop/start
+        pump(manager, lambda: not manager.stopping and manager.children
+             and old['driver'] not in {p.pid for p in manager.children.values()})
+        assert set(manager.children) == set(old)
+        assert old['driver'] not in {p.pid for p in manager.children.values()}
+        assert old['tracking'] not in {p.pid for p in manager.children.values()}
     finally:
         manager.close()
 
@@ -272,7 +291,8 @@ def test_nested_launch_child_failure_stops_even_when_launch_parent_survives(tmp_
         with (manager.directory/'driver.log').open('a') as stream:
             stream.write('[ERROR] [ur_ros2_control_node-1]: process has died [pid 12, exit code -6]\n')
         assert manager.children['driver'].poll() is None
-        pump(manager, lambda: not manager.children)
+        pump(manager, lambda: 'driver' not in manager.children and not manager.stopping)
+        assert 'tracking' in manager.children
         assert 'ROS child failed' in manager.message
         assert 'ur_ros2_control_node' in manager.message
     finally:

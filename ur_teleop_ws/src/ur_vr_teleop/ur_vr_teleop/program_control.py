@@ -7,7 +7,7 @@ the program is running: Dashboard readback and fresh driver status are required.
 """
 from dataclasses import dataclass, replace
 import math
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 # Dashboard service answers are checked explicitly, never inferred from transport.
 LOCAL_CONTROL_TEXT = (
@@ -104,18 +104,25 @@ def save_program_config(path, config):
     return path
 
 
-def same_program(loaded, configured):
-    """Compare Dashboard-reported identity with the reviewed configured program.
+def _program_identity(value):
+    if not isinstance(value, str):
+        return ''
+    text = value.strip().replace('\\', '/')
+    while len(text) > 1 and text.endswith('/'):
+        text = text[:-1]
+    return text
 
-    PolyScope may report a bare filename after a full path was loaded, so only
-    the final path component is compared.  Both the exact name and a missing
-    ``.urp`` suffix are accepted only for the configured component.
+
+def same_program(loaded, configured):
+    """Require an exact normalized identity; never infer from an ambiguous basename.
+
+    A bare loaded filename is not treated as proof that a configured absolute
+    path selected the same file.  Configure the exact value the Dashboard
+    reports (verify it in the program panel) when automatic start is enabled.
     """
-    if not isinstance(loaded, str) or not isinstance(configured, str):
-        return False
-    loaded_name = PurePosixPath(loaded.strip().replace('\\', '/')).name
-    configured_name = PurePosixPath(configured.strip().replace('\\', '/')).name
-    return bool(loaded_name and configured_name) and loaded_name == configured_name
+    loaded_identity = _program_identity(loaded)
+    configured_identity = _program_identity(configured)
+    return bool(loaded_identity and configured_identity) and loaded_identity == configured_identity
 
 
 class ProgramStartup:
@@ -146,6 +153,11 @@ class ProgramStartup:
         self.play_wait_deadline = None
         self.running_checked_at = -float('inf')
         self.ready_since = None
+        self.verified_running_at = None
+        self.monitor_pending = None
+        self.monitor_deadline = None
+        self.last_monitor_at = -float('inf')
+        self.last_loaded_check_at = -float('inf')
 
     @property
     def enabled(self):
@@ -172,6 +184,11 @@ class ProgramStartup:
         self.play_wait_deadline = None
         self.ready_since = None
         self.running_checked_at = -float('inf')
+        self.verified_running_at = None
+        self.monitor_pending = None
+        self.monitor_deadline = None
+        self.last_monitor_at = -float('inf')
+        self.last_loaded_check_at = -float('inf')
         self.overall_deadline = now + self.config.timeouts['dashboard']
         self.state, self.stage = 'WAITING_FOR_DASHBOARD', 'WAITING FOR DASHBOARD'
         self.message = 'Checking UR Dashboard services…'
@@ -185,6 +202,9 @@ class ProgramStartup:
         self.overall_deadline = None
         self.ready_since = None
         self.play_wait_deadline = None
+        self.verified_running_at = None
+        self.monitor_pending = None
+        self.monitor_deadline = None
         if self.state != 'FAILED':
             self.state, self.stage = 'IDLE', 'STOPPED'
             self.message = 'PROGRAM: STOPPED'
@@ -197,6 +217,9 @@ class ProgramStartup:
         self.pending = None
         self.deadline = None
         self.overall_deadline = None
+        self.verified_running_at = None
+        self.monitor_pending = None
+        self.monitor_deadline = None
         self.state, self.stage = 'FAILED', 'PROGRAM FAULT'
         self.message = f'{stage}: {detail}' + (f' {hint}' if hint else '')
 
@@ -234,6 +257,64 @@ class ProgramStartup:
 
     def _driver_ready(self, obs):
         return obs.get('driver_ready') is True and obs.get('driver_status_fresh') is True
+
+    def verified(self, now, max_age=2.5):
+        """READY is only meaningful while a recent Dashboard readback supports it."""
+        return (self.state == 'READY' and self.verified_running_at is not None
+                and 0 <= now - self.verified_running_at <= max_age)
+
+    def monitor_action(self, now):
+        """Return 'running' or 'loaded' when a verification readback is due."""
+        if self.state != 'READY' or self.monitor_pending is not None:
+            return None
+        if self.monitor_deadline is not None and now >= self.monitor_deadline:
+            self.mark_unverified('Dashboard verification timed out')
+            return None
+        if now - self.last_monitor_at < 1.0:
+            return None
+        action = ('loaded' if now - self.last_loaded_check_at >= 3.0 else 'running')
+        self.last_monitor_at = now
+        if action == 'loaded':
+            self.last_loaded_check_at = now
+        self.monitor_pending = action
+        self.monitor_deadline = now + 2.0
+        return action
+
+    def acknowledge_monitor(self, action, success, detail, now, value=None):
+        if action != self.monitor_pending:
+            return False
+        self.monitor_pending = None
+        self.monitor_deadline = None
+        if not success:
+            self.mark_unverified(detail or 'Dashboard readback failed')
+            return True
+        if action == 'running':
+            if value is True:
+                self.verified_running_at = now
+                self.state, self.stage = 'READY', 'PROGRAM RUNNING'
+                self.message = 'PROGRAM RUNNING (Dashboard verified)'
+            else:
+                self.verified_running_at = None
+                self.state, self.stage = 'STOPPED', 'PROGRAM STOPPED'
+                self.message = 'PROGRAM STOPPED — press START TELEOP to re-check'
+                self.requested = False
+        elif action == 'loaded':
+            if same_program(value, self.config.program):
+                # Identity alone does not prove the program is running; leave
+                # verified_running_at to the dedicated running readback.
+                self.state, self.stage = 'READY', 'PROGRAM RUNNING'
+                self.message = 'PROGRAM RUNNING (identity verified; awaiting running readback)'
+            else:
+                self.fail('Robot program identity changed: ' + str(value),
+                          'Stop teleoperation and verify the approved program on the pendant.')
+        return True
+
+    def mark_unverified(self, detail):
+        self.verified_running_at = None
+        self.monitor_pending = None
+        self.monitor_deadline = None
+        self.state, self.stage = 'UNVERIFIED', 'PROGRAM UNVERIFIED'
+        self.message = 'PROGRAM UNVERIFIED — ' + str(detail)
 
     def step(self, obs, now):
         if not self.requested:
@@ -344,6 +425,9 @@ class ProgramStartup:
         if self._driver_ready(obs):
             if self.ready_since is None:
                 self.ready_since = now
+            self.verified_running_at = now
+            self.last_monitor_at = now
+            self.last_loaded_check_at = now
             self.state, self.stage = 'READY', 'PROGRAM RUNNING'
             self.message = 'External Control program running; preparing the arm.'
             self.requested = False

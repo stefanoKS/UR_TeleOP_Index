@@ -147,6 +147,8 @@ Dashboard status fields and parameter synchronization are documented in the [ope
 
 [V6 independent gripper, Dashboard program start and ordered shutdown](docs/V6_INDEPENDENCE_REPORT.md).
 
+[V6.1 stop-dominant authorization, shared tracking and verification stabilization](docs/V6_1_STABILIZATION_REPORT.md).
+
 [Optional commissioning observations and historical setup records](docs/INITIAL_SETUP.md).
 
 ## Optional rack gripper

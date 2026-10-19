@@ -1,5 +1,7 @@
 # V6 — independent gripper, Dashboard program start and ordered shutdown
 
+> **Superseded for concurrency/lifecycle behavior by [V6.1 stabilization](V6_1_STABILIZATION_REPORT.md).** The V6 feature description remains useful; V6.1 changes stop priority, shared tracking retention, program identity and continuous verification.
+
 Date: 2026-10-19
 
 ## Analyzed revision
