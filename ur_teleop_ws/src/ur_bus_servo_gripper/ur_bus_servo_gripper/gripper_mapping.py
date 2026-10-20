@@ -58,7 +58,7 @@ class Follow:
                 self.reference = float(measured)
                 self.last_sent = measured
             return None
-        if abs(measured - self.last_sent) > 20:
+        if abs(measured - self.last_sent) > 100:
             raise EncoderFault(
                 'Encoder moved outside commanded lead; inspect mechanism and reconnect')
         desired = target_ticks(fraction, c)
