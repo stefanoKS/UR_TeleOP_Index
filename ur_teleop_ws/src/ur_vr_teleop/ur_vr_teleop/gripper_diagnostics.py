@@ -37,8 +37,10 @@ def performance_text(data, fresh=True):
     """Explain which configured limit currently restricts target advancement."""
     if not fresh:
         return 'Performance: feedback unavailable / stale'
-    fmt = lambda value, unit='': ('—' if value is None else f'{value:g}{unit}' if
-                                 isinstance(value, (int, float)) else str(value))
+    def fmt(value):
+        if value is None:
+            return '—'
+        return f'{value:g}' if isinstance(value, (int, float)) else str(value)
     desired = data.get('desired_ticks')
     measured = data.get('measured_ticks')
     outstanding = data.get('outstanding_error_ticks')

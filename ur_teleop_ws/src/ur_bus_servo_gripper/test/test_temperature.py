@@ -130,6 +130,17 @@ def test_five_spikes_require_manual_recovery(worker):
     assert worker.update('session_enabled', True) is False
 
 
+def test_anomalies_outside_the_window_do_not_accumulate():
+    t = Temperature(60)
+    for index in range(6):
+        at = 100. + index * 61.
+        t.sample(60, at, at)
+        t.sample(35, at + .05, at + .05, independent=True)
+        t.sample(36, at + .1, at + .1)
+        assert t.state == 'NORMAL'
+    assert t.status()['recent_anomaly_count'] == 1
+
+
 def test_anomaly_policy_is_configurable():
     t = Temperature(60, anomaly_limit=2, anomaly_window_s=10.)
     for index in range(2):

@@ -154,7 +154,12 @@ class Worker:
                 session_enabled=False, authorized=False, setup_authorized=False,
                 following=False, profile_enabled=self.config.enabled,
                 identity=self.driver.identity if self.driver else {},
-                feedback=asdict(fb) if fb else {}, **self.temperature_fields())
+                feedback=asdict(fb) if fb else {},
+                target_lead_ticks=self.config.max_target_lead_ticks,
+                effective_rate_ticks_s=self.config.rate_ticks_s,
+                sdk_speed=self.config.speed, sdk_acceleration=self.config.acceleration,
+                motor_moving=False, motor_not_following=False, stalled_seconds=0.,
+                **self.temperature_fields())
 
     def temperature_pause_status(self, recovered=False):
         fb = self.feedback
@@ -172,6 +177,11 @@ class Worker:
                 profile_enabled=self.config.enabled, identity=self.driver.identity,
                 feedback=asdict(fb) if fb else {},
                 feedback_wall_ns=time.time_ns() if recovered and fb else None,
+                target_lead_ticks=self.config.max_target_lead_ticks,
+                effective_rate_ticks_s=self.config.rate_ticks_s,
+                sdk_speed=self.config.speed, sdk_acceleration=self.config.acceleration,
+                motor_moving=bool(fb and fb.moving), motor_not_following=False,
+                stalled_seconds=0.,
                 **self.temperature_fields())
 
     def handle_fault(self, exc):
@@ -191,6 +201,10 @@ class Worker:
                 attempted_ticks=self.attempted_ticks,
                 write_started_wall_ns=self.attempt_at,
                 write_acknowledged=self.write_acknowledged,
+                target_lead_ticks=self.config.max_target_lead_ticks,
+                effective_rate_ticks_s=self.config.rate_ticks_s,
+                sdk_speed=self.config.speed, sdk_acceleration=self.config.acceleration,
+                motor_moving=False, motor_not_following=False, stalled_seconds=0.,
                 **self.temperature_fields())
 
     def check_temperature(self, fb):
@@ -325,7 +339,9 @@ class Worker:
                     self.calibration_follow = True
                     self.calibration_target = None
                     self.follow = Follow(replace(self.config,
-                        rate_ticks_s=min(self.config.rate_ticks_s, CALIBRATION_RATE_TICKS_S)))
+                        rate_ticks_s=min(self.config.rate_ticks_s, CALIBRATION_RATE_TICKS_S),
+                        max_target_lead_ticks=min(self.config.max_target_lead_ticks,
+                                                  CALIBRATION_LEAD_TICKS)))
                 else:
                     self.calibration_follow = False
                 measured = self.feedback.ticks
