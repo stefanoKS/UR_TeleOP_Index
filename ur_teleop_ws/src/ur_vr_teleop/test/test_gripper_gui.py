@@ -126,7 +126,7 @@ def test_stop_all_beats_pending_enable_and_late_ack_is_ignored():
 
 
 @pytest.mark.parametrize('state,label', [
-    ('TEMPERATURE_UNVERIFIED','TEMPERATURE UNVERIFIED'),
+    ('TEMPERATURE_UNVERIFIED','Temperature verification'),
     ('TEMPERATURE_CONFIRMED_HIGH','OVER-TEMPERATURE'),
     ('RECOVERY_REQUIRED','suspected temperature spike'),
     ('SENSOR_OR_COMMUNICATION_FAULT','FEEDBACK ERROR')])

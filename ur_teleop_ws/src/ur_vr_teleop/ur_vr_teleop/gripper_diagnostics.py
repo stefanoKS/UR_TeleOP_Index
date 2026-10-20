@@ -17,7 +17,7 @@ def temperature_text(data, fresh=True):
             warning = f'; previous suspect sample {previous} °C (history)' if previous is not None else ''
             return f"ST3215 temperature {fb.get('temperature_c', '—')} °C{warning}"
         return 'ST3215 temperature unavailable / stale'
-    titles = {'TEMPERATURE_UNVERIFIED': 'ST3215 TEMPERATURE UNVERIFIED',
+    titles = {'TEMPERATURE_UNVERIFIED': 'Temperature verification — movement paused',
               'TEMPERATURE_CONFIRMED_HIGH': 'ST3215 OVER-TEMPERATURE — confirmed',
               'RECOVERY_REQUIRED': 'ST3215 suspected temperature spike — recovery required',
               'SENSOR_OR_COMMUNICATION_FAULT': 'ST3215 FEEDBACK ERROR'}

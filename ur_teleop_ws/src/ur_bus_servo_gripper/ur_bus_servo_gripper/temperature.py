@@ -3,6 +3,9 @@ import math
 
 
 class Temperature:
+    ANOMALY_LIMIT = 3
+    ANOMALY_WINDOW_S = 60.
+
     def __init__(self, limit):
         self.limit = limit
         self.state = 'NORMAL'
@@ -10,6 +13,7 @@ class Temperature:
         self.suspicious = None
         self.confirmations = []
         self.started = self.last_confirmation_at = None
+        self.anomalies = []
         self.reason = ''
 
     def sample(self, value, received_at, now, independent=False):
@@ -26,6 +30,9 @@ class Temperature:
             if value < self.limit:
                 self.verified, self.verified_at = value, received_at
                 return
+            self.anomalies = [at for at in self.anomalies
+                              if received_at - at < self.ANOMALY_WINDOW_S]
+            self.anomalies.append(received_at)
             self.suspicious, self.started = value, received_at
             self.confirmations = []
             self.state = 'TEMPERATURE_UNVERIFIED'
@@ -43,8 +50,14 @@ class Temperature:
                 self.reason = f'Confirmed high temperature: {self.suspicious}, {value} C; cool, Connect read-only, then explicitly enable'
             elif len(self.confirmations) == 2:
                 self.verified, self.verified_at = value, received_at
-                self.state = 'RECOVERY_REQUIRED'
-                self.reason = f'Temperature spike suspected: {self.suspicious} C; subsequent readings normal. Review, Connect read-only, then re-enable gripper'
+                if len(self.anomalies) >= self.ANOMALY_LIMIT:
+                    self.state = 'RECOVERY_REQUIRED'
+                    self.reason = (f'Repeated temperature anomalies: {len(self.anomalies)} within '
+                                   f'{self.ANOMALY_WINDOW_S:.0f} s; manual recovery required')
+                else:
+                    self.state = 'NORMAL'
+                    self.reason = (f'Temperature verification complete: suspect {self.suspicious} C; '
+                                   'confirmations normal; fresh trigger pickup required')
 
     def fail(self, reason):
         self.state = 'SENSOR_OR_COMMUNICATION_FAULT'
@@ -53,4 +66,5 @@ class Temperature:
     def status(self):
         return dict(state=self.state, verified_temperature_c=self.verified,
                     verified_at=self.verified_at, suspicious_temperature_c=self.suspicious,
-                    confirmation_readings=list(self.confirmations), reason=self.reason)
+                    confirmation_readings=list(self.confirmations),
+                    recent_anomaly_count=len(self.anomalies), reason=self.reason)

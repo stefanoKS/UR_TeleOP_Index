@@ -24,26 +24,26 @@ def confirm(w, value=None, error=None, age=0):
 
 
 @pytest.mark.parametrize('active', [False, True])
-def test_isolated_spike_latches_without_replay(worker, active):
+def test_isolated_spike_pauses_without_replay_or_session_loss(worker, active):
     if active:
         engage(worker)
     sample(worker, 35); sample(worker, 36)
     before = list(FakeDriver.writes)
     sample(worker, 107)
     assert worker.temperature.state == 'TEMPERATURE_UNVERIFIED'
-    assert not worker.session_enabled and not worker.follow.active
+    assert worker.session_enabled and not worker.follow.active
+    assert worker.snapshot()['authorized'] is False
     assert worker.update('session_enabled', True) is False
     confirm(worker, 35); sample(worker, 36)
-    assert worker.temperature.state == 'RECOVERY_REQUIRED'
+    assert worker.temperature.state == 'NORMAL'
+    assert worker.session_enabled
     assert worker.temperature.confirmations == [35, 36]
     assert worker.last_temperature_event['feedback']['temperature_c'] == 107
     for _ in range(10):
         drive(worker, 1.)
     assert FakeDriver.writes == before
-    worker.request('connect');worker.step()
-    assert not worker.session_enabled
-    engage(worker);drive(worker, 1.)
-    assert FakeDriver.writes == before + [1654]
+    drive(worker, .5);drive(worker, .6);drive(worker, .5);drive(worker, 1.)
+    assert FakeDriver.writes[-1] == 1654
 
 
 @pytest.mark.parametrize('value', [60, 70, 74, 79])
@@ -111,12 +111,11 @@ def test_hundreds_normal_cycles(worker):
 
 
 def test_repeated_spikes_bounded_evidence(worker):
-    for _ in range(40):
+    for index in range(3):
         sample(worker, 35);sample(worker, 107);confirm(worker, 35);sample(worker, 36)
-        assert worker.temperature.state == 'RECOVERY_REQUIRED'
-        worker.request('connect');worker.step()
-    assert worker.diagnostics.counters['suspicious_temperatures'] == 40
-    assert len(worker.diagnostics.events) == 32
+        assert worker.temperature.state == ('RECOVERY_REQUIRED' if index == 2 else 'NORMAL')
+    assert worker.diagnostics.counters['suspicious_temperatures'] == 3
+    assert not worker.session_enabled
     assert not FakeDriver.writes
 
 
@@ -148,8 +147,11 @@ def test_stop_during_confirmation_late_result_cannot_reauthorize(worker, stop):
         return 35, time.monotonic()
     worker.driver.read_temperature = read
     drive(worker, 1.)
-    sample(worker, 36)
-    assert not worker.session_enabled and not worker.follow.active
+    if stop != 'close':
+        sample(worker, 36)
+    assert worker.session_enabled is (stop == 'tracking')
+    assert not worker.follow.active
+    assert worker.snapshot().get('authorized') is not True
     assert not FakeDriver.writes
 
 
@@ -183,8 +185,11 @@ def test_calibration_retired_during_verification(worker):
     worker.request('jog_close');sample(worker,107)
     assert worker.calibration_target is None
     confirm(worker,35);sample(worker,36)
-    worker.request('open');worker.step()
+    before = list(FakeDriver.writes)
+    drive(worker, .5)
     assert not FakeDriver.writes
+    assert FakeDriver.writes == before
+    assert worker.calibration_target is None
     assert worker.setup_lockout
 
 

@@ -186,7 +186,7 @@ def test_real_sdk_worker_confirmation_is_read_only(bus,tmp_path):
         assert w.last_temperature_event['feedback']['raw_bytes'][7]==107
         bus.memory[63]=35;w.step()
         bus.memory[63]=36;w.step()
-        assert w.temperature.state=='RECOVERY_REQUIRED'
+        assert w.temperature.state=='NORMAL'
         assert w.temperature.confirmations==[35,36]
         assert all(op in (1,2) for _,op,_ in bus.instructions)
         assert any(op==2 and bytes(data)==bytes([63,1]) for _,op,data in bus.instructions)

@@ -86,7 +86,7 @@ def run():
             rejected=set_enabled(True,expect=False)
             assert 'heartbeat' in rejected.message.lower(), rejected.message
             state['heartbeat']=True;pump(.25)
-            set_enabled(True);set_enabled(False)
+            set_enabled(True)
             assert latest['schema_version']==2 and 'serial_diagnostics' in latest
             assert latest['fault_category']=='NONE'
             assert node.count_publishers('/gripper/status')==1
@@ -98,16 +98,11 @@ def run():
             count=len(FakeDriver.writes)
             FakeDriver.temperature=36
             pump(.2)
-            assert latest['temperature']['state']=='RECOVERY_REQUIRED',latest
-            assert not latest['session_enabled'] and not latest['authorized']
+            assert latest['temperature']['state']=='NORMAL',latest
+            assert latest['session_enabled'] and not latest['following']
             assert latest['last_temperature_event']['feedback']['temperature_c']==107
             assert len(FakeDriver.writes)==count
-            set_enabled(True,expect=False)
-            connect=fixture.create_client(Trigger,'/gripper/connect')
-            assert connect.wait_for_service(timeout_sec=1.)
-            connect.call_async(Trigger.Request());pump(.2)
-            assert latest['temperature']['state']=='NORMAL'
-            state['raw']=.5;set_enabled(True);pump(.2)
+            state['raw']=.5;pump(.2)
             assert len(FakeDriver.writes)==count
             state['raw']=.6;pump(.2);state['raw']=.5;pump(.2)
             assert latest['following'],latest
@@ -115,7 +110,7 @@ def run():
             assert len(FakeDriver.writes)>count
             set_enabled(False)
             assert not node.get_publishers_info_by_topic('/scaled_joint_trajectory_controller/joint_trajectory')
-            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP, heartbeat-gated enable, thermal status/inhibition/reconnect/pickup; no arm publisher')
+            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP, heartbeat-gated enable, thermal pause/session retention/pickup; no arm publisher')
         finally:
             ex.remove_node(node);node.destroy_node();fixture.destroy_node();ex.shutdown();rclpy.shutdown()
 

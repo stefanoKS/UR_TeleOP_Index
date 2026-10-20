@@ -134,3 +134,14 @@ def test_external_session_loss_is_reported_disabled():
     control.observe(status(False, False), True, .2)
     assert control.state == 'DISABLED'
     assert not control.heartbeat_allowed
+
+
+def test_temperature_pause_retains_enabled_control_state():
+    control = GripperControl()
+    control.request_enable(0)
+    control.acknowledge(1, 'enable', True, '', .1)
+    paused = status(True, False)
+    paused['temperature'] = {'state': 'TEMPERATURE_UNVERIFIED'}
+    control.observe(paused, True, .2)
+    assert control.state == 'ENABLED'
+    assert control.heartbeat_allowed

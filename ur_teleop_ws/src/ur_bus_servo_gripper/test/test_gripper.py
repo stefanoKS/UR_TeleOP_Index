@@ -254,7 +254,7 @@ def test_motor_overtemperature_and_status_stop_before_write(worker):
     worker.driver.read=lambda: Feedback(1650,0,0,12.,70,0,0,False,time.monotonic())
     drive(worker,1.)
     assert worker.temperature.state == 'TEMPERATURE_UNVERIFIED'
-    assert not worker.session_enabled
+    assert worker.session_enabled
     assert not FakeDriver.writes
 
 

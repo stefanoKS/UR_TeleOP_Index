@@ -30,14 +30,14 @@ Independent temperature reads use `readTxRx(id, 63, 1)` on the same serial owner
 | State | Action / exit |
 |---|---|
 | `NORMAL` | Fresh valid below-limit feedback permits existing authorization and pickup logic. |
-| `TEMPERATURE_UNVERIFIED` | First at/above-limit reading withdraws session permission, clears pending motion/pickup/calibration and immediately blocks writes. Next worker cycle reads register 63 once. If normal, the next cycle reads the full feedback block once. |
+| `TEMPERATURE_UNVERIFIED` | First at/above-limit reading preserves enabled-session intent, clears pending motion/pickup/calibration and immediately blocks writes. Next worker cycle reads register 63 once. If normal, the next cycle reads the full feedback block once. |
 | `TEMPERATURE_CONFIRMED_HIGH` | An independent at/above-limit value latches high temperature; close the link without torque release. Cool and inspect before deliberate read-only Connect. |
 | `SENSOR_OR_COMMUNICATION_FAULT` | Failed, stale, malformed or overdue temperature confirmation never implies normal temperature; close the link and require controlled Connect. Ordinary communication, motor, mechanical, configuration and unknown worker faults do not enter this thermal state. |
-| `RECOVERY_REQUIRED` | Both confirmation reads below limit indicate a suspected transient, not proof of its cause. Retain warning and inhibit; deliberately Connect read-only before ENABLE. |
+| `RECOVERY_REQUIRED` | Three suspicious readings within 60 seconds conservatively latch recovery even when confirmations are normal; deliberately Connect read-only before ENABLE. |
 
 Confirmation has at most two additional reads, one per worker cycle, and a 250 ms overall freshness/deadline budget. A register confirmation at/above limit needs no further read. A nonzero motor status/error faults immediately, including during confirmation. No retries continue after a failed confirmation. Repeated Connect cannot bypass an unfinished confirmation. Pending motion requests are discarded, not released later.
 
-**Recovery:** review the event, resolve the cause/cool if necessary, choose **Connect / Read Servo**, observe fresh normal feedback, then explicitly **ENABLE GRIPPER** and repeat trigger pickup. Reconnect with high temperature enters verification again. Valid calibration, fresh tracking/trigger/heartbeat and all existing bounds remain required for follow. Calibration consent is retired and must be withdrawn before being deliberately granted again. No command, holding-torque release or automatic reauthorization is used to recover. A packet already transmitted cannot be revoked; software withdrawal does not guarantee physical standstill.
+**Recovery:** when both confirmations are normal and the repeated-anomaly threshold has not been reached, the guard returns to `NORMAL`, retains an already-enabled session and historical event, and requires fresh deliberate trigger pickup. It does not reconnect, replay a target or resume calibration. Confirmed high, failed confirmation and repeated-anomaly escalation still require review, read-only Connect, explicit ENABLE and pickup. Reconnect with high temperature enters verification again. A concurrent STOP remains dominant and is never undone by confirmation. A packet already transmitted cannot be revoked; software withdrawal does not guarantee physical standstill.
 
 ## Additive status contract (schema version 2 retained)
 

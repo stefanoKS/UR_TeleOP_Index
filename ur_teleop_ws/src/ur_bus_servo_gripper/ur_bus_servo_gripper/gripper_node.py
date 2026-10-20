@@ -179,8 +179,18 @@ class GripperNode(Node):
         self.worker.update('duplicate', self.count_publishers('/gripper/status') > 1)
         status = self.worker.snapshot()
         fb = status.get('feedback')
-        if fb and time.monotonic() - fb['received_at'] >= .25:
-            status.update(feedback_valid=False, status='Fault', reason='Serial feedback stale; reconnect required')
+
+        if (
+            fb
+            and status.get('feedback_valid')
+            and time.monotonic() - fb['received_at'] >= .25
+        ):
+            status.update(
+                feedback_valid=False,
+                status='Fault',
+                reason='Serial feedback stale; reconnect required'
+            )
+
         stamp = self.get_clock().now().to_msg()
         status['schema_version'] = 2
         status.setdefault('fault_category', 'NONE')

@@ -1309,8 +1309,14 @@ class OperatorGUI:
         percent = f'{fraction*100:.0f}%' if isinstance(fraction, (float, int)) else '—'
         requested = gd.get('requested_fraction')
         desired = f'{requested*100:.0f}%' if isinstance(requested, (float, int)) else '—'
-        trigger_state = 'following' if gd.get('following') else 'pickup required'
-        session = 'ENABLED' if gd.get('session_enabled') else 'not enabled'
+        thermal_state = gd.get('temperature', {}).get('state', 'NORMAL')
+        if thermal_state == 'TEMPERATURE_UNVERIFIED':
+            trigger_state = 'TEMPERATURE VERIFYING / MOTION PAUSED'
+        elif gd.get('following'):
+            trigger_state = 'FOLLOWING'
+        else:
+            trigger_state = 'WAITING FOR FRESH TRIGGER PICKUP'
+        session = 'ENABLED' if gd.get('session_enabled') else 'DISABLED'
         authorization = 'AUTHORIZED' if gd.get('authorized') else 'not authorized'
         control = getattr(self, 'gripper_control', None)
         control_state = control.state if control is not None else 'UNAVAILABLE'

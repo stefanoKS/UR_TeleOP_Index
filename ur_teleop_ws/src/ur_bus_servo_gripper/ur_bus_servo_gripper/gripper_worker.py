@@ -120,6 +120,18 @@ class Worker:
         self.calibration_follow = False
         self.stall_since = self.last_progress = None
 
+    def pause_temperature_verification(self):
+        # Preserve the enabled session, but retire every movement path. The
+        # epoch makes concurrent STOP/input withdrawal dominant at pre-write.
+        with self.lock:
+            self.epoch += 1
+            self.action = None
+            self.setup_lockout = True
+        self.follow.reset()
+        self.calibration_target = None
+        self.calibration_follow = False
+        self.stall_since = self.last_progress = None
+
     def temperature_fields(self):
         return dict(temperature=self.temperature.status(),
                     serial_diagnostics=self.diagnostics.snapshot(),
@@ -139,6 +151,24 @@ class Worker:
                 following=False, profile_enabled=self.config.enabled,
                 identity=self.driver.identity if self.driver else {},
                 feedback=asdict(fb) if fb else {}, **self.temperature_fields())
+
+    def temperature_pause_status(self, recovered=False):
+        fb = self.feedback
+        reason = (self.temperature.reason if recovered else
+                  'Temperature verification — movement paused.')
+        if not recovered:
+            self.last_fault_reason = self.temperature.reason
+            self.fault_category = FaultCategory.TEMPERATURE
+        with self.lock:
+            self.output = dict(connection='Connected', connected=True,
+                status='Holding' if recovered else 'Temperature verification', reason=reason,
+                motor_fault='', feedback_valid=bool(recovered and fb),
+                session_enabled=self.session_enabled, authorized=False,
+                setup_authorized=False, following=False,
+                profile_enabled=self.config.enabled, identity=self.driver.identity,
+                feedback=asdict(fb) if fb else {},
+                feedback_wall_ns=time.time_ns() if recovered and fb else None,
+                **self.temperature_fields())
 
     def handle_fault(self, exc):
         self.last_fault_reason = str(exc)
@@ -168,19 +198,16 @@ class Worker:
         before = self.temperature.state
         self.temperature.sample(fb.temperature_c, fb.received_at, time.monotonic())
         if before == 'NORMAL' and self.temperature.state == 'TEMPERATURE_UNVERIFIED':
-            self.inhibit()
+            self.pause_temperature_verification()
             self.diagnostics.counters['suspicious_temperatures'] += 1
             self.last_temperature_event = dict(feedback=asdict(fb),
                 previous_verified_temperature_c=self.temperature.verified,
                 transaction=dict(self.diagnostics.last), wall_ns=time.time_ns())
             self.diagnostics.event('suspicious_temperature', **self.last_temperature_event)
-        if self.temperature.state != 'NORMAL':
-            self.inhibit()
+        if self.temperature.state == 'TEMPERATURE_UNVERIFIED':
             self.last_temperature_event = dict(self.last_temperature_event or {},
                                                validation=self.temperature.status())
-            if self.temperature.state == 'SENSOR_OR_COMMUNICATION_FAULT':
-                self.disconnect()
-            self.blocked_status()
+            self.temperature_pause_status()
             return False
         return True
 
@@ -203,8 +230,21 @@ class Worker:
         self.last_temperature_event = dict(self.last_temperature_event or {},
             validation=self.temperature.status(), confirmation_transaction=dict(self.diagnostics.last))
         self.diagnostics.event('temperature_confirmation', **self.last_temperature_event)
+        if self.quit.is_set():
+            self.inhibit()
+            self.disconnect()
+            return
         if self.temperature.state == 'TEMPERATURE_CONFIRMED_HIGH':
             self.diagnostics.counters['confirmed_high_events'] += 1
+        if self.temperature.state == 'NORMAL':
+            self.last_fault_reason = ''
+            self.fault_category = FaultCategory.NONE
+            self.temperature_pause_status(recovered=True)
+            return
+        if self.temperature.state == 'TEMPERATURE_UNVERIFIED':
+            self.temperature_pause_status()
+            return
+        self.inhibit()
         if self.temperature.state in ('TEMPERATURE_CONFIRMED_HIGH', 'SENSOR_OR_COMMUNICATION_FAULT'):
             self.disconnect()
         self.blocked_status()

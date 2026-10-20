@@ -72,7 +72,7 @@ def run():
         assert panel.window.winfo_exists() and 'unavailable' in panel.telemetry.get()
         panel.ros_future=None
         for thermal_state, label in [('NORMAL','temperature 35'),
-                ('TEMPERATURE_UNVERIFIED','TEMPERATURE UNVERIFIED'),
+                ('TEMPERATURE_UNVERIFIED','Temperature verification'),
                 ('TEMPERATURE_CONFIRMED_HIGH','OVER-TEMPERATURE'),
                 ('RECOVERY_REQUIRED','suspected temperature spike'),
                 ('SENSOR_OR_COMMUNICATION_FAULT','FEEDBACK ERROR')]:
