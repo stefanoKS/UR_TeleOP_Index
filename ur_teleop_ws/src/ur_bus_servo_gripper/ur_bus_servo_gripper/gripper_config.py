@@ -37,6 +37,12 @@ class Config:
     temperature_limit: int = 60
     stall_error_ticks: int = 40
     stall_seconds: float = 2.0
+    # Follow continuity across a short verified input/serial interruption.
+    follow_resume_window_s: float = 2.0
+    follow_verify_s: float = 0.15
+    # Bounded read-only feedback retries; a write is never retried.
+    comm_retry_count: int = 2
+    comm_retry_window_s: float = 0.5
 
     def validate(self, calibrated=False):
         if type(self.version) is not int or self.version != 1:
@@ -50,17 +56,26 @@ class Config:
                   'min_ticks': (0, 4095), 'max_ticks': (0, 4095), 'speed': (1, 1000),
                   'acceleration': (1, 254), 'threshold_ticks': (1, 20), 'jog_ticks': (1, 20),
                   'max_target_lead_ticks': (5, 60),
-                  'temperature_limit': (20, 70), 'stall_error_ticks': (5, 200)}
+                  'temperature_limit': (20, 70), 'stall_error_ticks': (5, 200),
+                  'comm_retry_count': (0, 5)}
         for key, (low, high) in ranges.items():
             value = getattr(self, key)
             if type(value) is not int or not low <= value <= high:
                 raise ValueError(f'{key} must be an integer in {low}..{high}')
-        for key in ('rate_ticks_s', 'trigger_min', 'trigger_max', 'deadzone', 'stall_seconds'):
+        for key in ('rate_ticks_s', 'trigger_min', 'trigger_max', 'deadzone',
+                    'stall_seconds', 'follow_resume_window_s', 'follow_verify_s',
+                    'comm_retry_window_s'):
             value = getattr(self, key)
             if type(value) not in (float, int) or not math.isfinite(value):
                 raise ValueError(key + ' must be finite')
         if not 1 <= self.rate_ticks_s <= 2000 or not 0 <= self.deadzone < .25:
             raise ValueError('Rate must be 1..2000 ticks/s; deadzone must be 0..<0.25')
+        if not .5 <= self.follow_resume_window_s <= 10:
+            raise ValueError('Follow resume window must be 0.5..10 s')
+        if not .05 <= self.follow_verify_s <= 1:
+            raise ValueError('Follow verification interval must be 0.05..1 s')
+        if not .1 <= self.comm_retry_window_s <= 2:
+            raise ValueError('Communication retry window must be 0.1..2 s')
         if self.trigger_max - self.trigger_min < .01 or not .2 <= self.stall_seconds <= 5:
             raise ValueError('Invalid trigger range or stall observation interval')
         if calibrated or self.enabled:

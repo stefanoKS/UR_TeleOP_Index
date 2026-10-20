@@ -80,8 +80,12 @@ class GripperNode(Node):
     def joy(self, msg, info):
         stamp = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
         age = self.get_clock().now().nanoseconds - stamp
+        # The bridge publishes a zero-filled Joy during loss. Never present
+        # that synthetic sample as operator input: require both tracking flags
+        # to be healthy for the current stream and in the same publication order.
         valid = (self.source_fresh(info) and 0 <= age < 250_000_000 and stamp > self.last_joy_stamp
-                 and len(msg.axes) > 1 and math.isfinite(msg.axes[1]))
+                 and len(msg.axes) > 1 and math.isfinite(msg.axes[1])
+                 and all(self.flags.values()))
         self.last_joy_stamp = max(stamp, self.last_joy_stamp)
         if valid:
             self.pending_joy = (float(msg.axes[1]), time.monotonic())
@@ -114,8 +118,16 @@ class GripperNode(Node):
         self.flag('optical', msg, info)
 
     def heartbeat(self, msg, info):
-        value = msg.data and self.source_fresh(info)
-        self.heartbeat_at = time.monotonic() if value else -float('inf')
+        if not msg.data:
+            # Explicit operator withdrawal (STOP or not enabled). This must
+            # never be confused with a delayed delivery of a true heartbeat.
+            value = False
+        elif self.source_fresh(info):
+            value = True
+        else:
+            # Stale delivery is a temporary authorization gap, not a STOP.
+            value = None
+        self.heartbeat_at = time.monotonic() if value is True else -float('inf')
         self.worker.update('heartbeat', value)
 
     def calibration(self, msg, info):

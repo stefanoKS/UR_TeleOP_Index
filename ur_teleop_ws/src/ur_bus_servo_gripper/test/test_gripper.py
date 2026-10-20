@@ -31,7 +31,11 @@ def test_mapping(config, fraction, ticks):
     dict(min_ticks=-1), dict(open_ticks=2300), dict(servo_id=-1), dict(speed=0),
     dict(acceleration=0), dict(trigger_min=1), dict(trigger_max=float('nan')),
     dict(rate_ticks_s=0), dict(rate_ticks_s=2001), dict(max_target_lead_ticks=4),
-    dict(max_target_lead_ticks=61), dict(open_ticks=True), dict(invert=1)])
+    dict(max_target_lead_ticks=61), dict(follow_resume_window_s=.4),
+    dict(follow_resume_window_s=11), dict(follow_verify_s=.01),
+    dict(follow_verify_s=2), dict(comm_retry_count=6),
+    dict(comm_retry_window_s=0), dict(comm_retry_window_s=3),
+    dict(open_ticks=True), dict(invert=1)])
 def test_config_rejects(config, values):
     with pytest.raises(ValueError): replace(config, **values).validate()
 
@@ -51,6 +55,9 @@ def test_legacy_saved_profile_keeps_default_lead(tmp_path, config):
     loaded = load(path)
     assert loaded.max_target_lead_ticks == 20
     assert loaded.rate_ticks_s == 500. and loaded.speed == 500
+    assert loaded.follow_resume_window_s == 2.0
+    assert loaded.follow_verify_s == .15
+    assert loaded.comm_retry_count == 2 and loaded.comm_retry_window_s == .5
 
 
 def test_normalization_and_noise(config):
@@ -84,12 +91,16 @@ def test_pickup_and_recovery(config):
     f.step(.5,1650,.04)
     assert f.active
     assert f.step(1,1650,.04) == 1654
+    f.commit(1654)
     f.reset()
     assert f.step(0,1650,.04) is None
     assert f.step(.5,1650,.04) is None
     assert f.active
     assert f.step(1,1650,100) == 1654  # never catch up after a scheduling gap
-    for _ in range(100): f.step(1,1650,.04)
+    f.commit(1654)
+    for _ in range(100):
+        target = f.step(1,1650,.04)
+        if target is not None: f.commit(target)
     assert f.last_sent <= 1670
 
 
@@ -99,10 +110,13 @@ def test_fast_rate_with_fast_tracking(config):
     f.step(.6, 1650, .04); f.step(.5, 1650, .04)
     assert f.active
     measured = 1650
-    assert f.step(1, measured, .04) == 1710  # bounded by the 60-tick lead
+    target = f.step(1, measured, .04)
+    assert target == 1710  # bounded by the 60-tick lead
+    f.commit(target)
     for _ in range(10):
         measured = f.last_sent
-        f.step(1, measured, .04)
+        target = f.step(1, measured, .04)
+        if target is not None: f.commit(target)
     assert f.last_sent <= 2300
 
 
@@ -110,8 +124,11 @@ def test_fast_rate_with_slow_motor_never_accumulates_lead(config):
     c = replace(config, rate_ticks_s=2000., max_target_lead_ticks=60)
     f = Follow(c)
     f.step(.6, 1650, .04); f.step(.5, 1650, .04)
+    target = f.step(1, 1650, .04)
+    assert target == 1710
+    f.commit(target)
     for _ in range(50):
-        f.step(1, 1650, .04)
+        assert f.step(1, 1650, .04) is None
     assert f.last_sent == 1710
     assert f.last_sent - 1650 == c.max_target_lead_ticks
 
@@ -123,6 +140,7 @@ def test_lead_change_requires_no_target_outside_travel(config):
     for _ in range(20):
         target = f.step(1, 1650, .04)
         assert target is None or c.min_ticks <= target <= c.max_ticks
+        if target is not None: f.commit(target)
     assert f.last_sent == c.max_ticks
 
 
@@ -161,12 +179,17 @@ def worker(tmp_path,config,monkeypatch):
     return worker
 
 
-def drive(w,raw=.5,enabled=True,pose=True,optical=True):
+def drive_inputs(w,raw=.5,session=True,heartbeat=True,pose=True,optical=True):
     # No arm backend input is supplied: gripper authorization is independent.
     w.now[0]+=.04
-    for key,value in dict(session_enabled=enabled,heartbeat=enabled,pose=pose,optical=optical,joy=raw).items():
+    for key,value in dict(session_enabled=session,heartbeat=heartbeat,pose=pose,
+                          optical=optical,joy=raw).items():
         w.update(key,value)
     w.step()
+
+
+def drive(w,raw=.5,enabled=True,pose=True,optical=True):
+    drive_inputs(w,raw,session=enabled,heartbeat=enabled,pose=pose,optical=optical)
 
 
 def engage(w):
@@ -181,36 +204,53 @@ def test_start_connect_save_never_moves(worker, tmp_path,config):
     assert not FakeDriver.writes
 
 
-def test_follow_a_independent_stop_and_tracking_loss(worker):
+def test_short_pose_loss_holds_then_auto_resumes(worker):
     engage(worker);drive(worker,1)
     assert FakeDriver.writes[-1]==1654
-    # A release is not part of gripper authorization; follow remains active.
     drive(worker,1); assert len(FakeDriver.writes)==2
     count=len(FakeDriver.writes)
     drive(worker,0,pose=False)
     assert len(FakeDriver.writes)==count
-    drive(worker,0); assert not worker.follow.active
-    drive(worker,.5);drive(worker,1)
-    assert FakeDriver.writes[-1]==1654
+    assert worker.follow.active and worker.snapshot()['follow_state']=='SIGNAL_PAUSED'
+    # Healthy observations must persist for the verification interval.
+    for _ in range(6):
+        drive(worker,0)
+    status=worker.snapshot()
+    assert status['follow_state']=='FOLLOWING' and status['recovery_count']==1
+    assert not status['resume_pending']
+    drive(worker,0)
+    assert FakeDriver.writes and FakeDriver.writes[-1] < 1654
+    # Explicit session withdrawal remains dominant and requires a new pickup.
     count=len(FakeDriver.writes)
     drive(worker,0,enabled=False)
     drive(worker,0,enabled=False)
     assert len(FakeDriver.writes)==count
+    assert worker.snapshot()['follow_state']=='DISABLED'
 
 
-def test_transient_loss_between_worker_ticks_resets(worker):
-    engage(worker)
-    worker.update('pose',False);worker.update('pose',True)
-    drive(worker,1)
-    assert not worker.follow.active
-    assert not FakeDriver.writes
+def test_false_true_between_worker_ticks_is_not_ignored(worker):
+    engage(worker);drive(worker,1)
+    count=len(FakeDriver.writes)
+    worker.update('pose',False)
+    worker.update('pose',True)
+    worker.now[0]+=.04
+    for key,value in dict(session_enabled=True,heartbeat=True,pose=True,
+                          optical=True,joy=1.).items():
+        worker.update(key,value)
+    worker.step()
+    assert len(FakeDriver.writes)==count
+    assert worker.follow.active
+    assert worker.snapshot()['follow_state']=='RECOVERY_VERIFYING'
+    assert worker.snapshot()['resume_pending'] is True
 
 
-def test_stale_input_holds(worker):
+def test_stale_input_pauses_without_losing_follow(worker):
     engage(worker);drive(worker,1)
     count=len(FakeDriver.writes)
     worker.now[0]+=.3;worker.step()
-    assert not worker.follow.active
+    assert worker.follow.active
+    assert worker.snapshot()['follow_state']=='SIGNAL_PAUSED'
+    assert worker.snapshot()['resume_pending'] is True
     assert len(FakeDriver.writes)==count
 
 
@@ -224,11 +264,18 @@ def test_reconnect_does_not_replay(worker):
     assert not worker.follow.active
 
 
-def test_failed_feedback_blocks_writes(worker):
-    engage(worker)
+def test_repeated_feedback_failure_latches_without_writes(worker):
+    engage(worker);drive(worker,1)
+    count=len(FakeDriver.writes)
     worker.driver.fail=True
-    with pytest.raises(IOError):drive(worker,1)
-    assert not FakeDriver.writes
+    for _ in range(3):
+        drive(worker,1)
+    with pytest.raises(IOError) as caught:
+        drive(worker,1)
+    worker.handle_fault(caught.value)
+    assert len(FakeDriver.writes)==count
+    assert worker.driver is None
+    assert worker.snapshot()['fault_category']=='COMMUNICATION'
 
 
 def test_calibration_authorization(worker):

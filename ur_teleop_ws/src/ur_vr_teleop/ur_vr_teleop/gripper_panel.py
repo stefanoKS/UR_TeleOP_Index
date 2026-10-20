@@ -1,8 +1,8 @@
 """Tk-only calibration editor; ROS requests and persistence stay asynchronous."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from .gripper_diagnostics import (fault_text, performance_text, serial_text,
-                                  temperature_text)
+from .gripper_diagnostics import (fault_text, follow_state_text, performance_text,
+                                  serial_text, temperature_text)
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -63,7 +63,12 @@ class GripperPanel:
             ('SAFETY LIMITS', [
                 ('temperature_limit','Temperature fault threshold (°C)'),
                 ('stall_error_ticks','Persistent error threshold (ticks)'),
-                ('stall_seconds','No-progress timeout (s)')])]
+                ('stall_seconds','No-progress timeout (s)')]),
+            ('FOLLOW RECOVERY', [
+                ('follow_resume_window_s','Automatic resume window (s)'),
+                ('follow_verify_s','Healthy signal verification (s)'),
+                ('comm_retry_count','Read-only communication retries'),
+                ('comm_retry_window_s','Communication retry window (s)')])]
         row = 2
         for title, labels in sections:
             ttk.Label(body, text=title, font=('', 10, 'bold')).grid(
@@ -173,6 +178,7 @@ class GripperPanel:
             f"Servo ID: {data.get('identity', {}).get('servo_id', '—')}  "
             f"Session enabled: {data.get('session_enabled', False) if fresh else False}\n"
             f"Current Position: {fb.get('ticks', 'unavailable')} ticks\n"
+            f"Follow: {follow_state_text(data) if fresh else 'unavailable'}\n"
             f"{performance_text(data, fresh)}\n"
             f"{temperature_text(data, fresh)}\n{fault_text(data)}\n{serial_text(data)}\n"
             f"Last fault/warning: {data.get('last_fault_reason', 'none')}\n"

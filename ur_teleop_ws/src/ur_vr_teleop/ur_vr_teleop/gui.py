@@ -25,7 +25,7 @@ from .dashboard_state import (ParameterState, Notifications, equivalent, boolean
 from .dashboard_process import ManagerWorker
 from .dashboard_ros import RosDataBridge, RosExecutorThread
 from .gripper_control import GripperControl
-from .gripper_diagnostics import fault_text, temperature_text
+from .gripper_diagnostics import fault_text, follow_state_text, temperature_text
 from .program_control import ProgramConfig, ProgramStartup, load_program_config, same_program
 from .startup import Startup
 
@@ -1312,10 +1312,8 @@ class OperatorGUI:
         thermal_state = gd.get('temperature', {}).get('state', 'NORMAL')
         if thermal_state == 'TEMPERATURE_UNVERIFIED':
             trigger_state = 'TEMPERATURE VERIFYING / MOTION PAUSED'
-        elif gd.get('following'):
-            trigger_state = 'FOLLOWING'
         else:
-            trigger_state = 'WAITING FOR FRESH TRIGGER PICKUP'
+            trigger_state = follow_state_text(gd)
         session = 'ENABLED' if gd.get('session_enabled') else 'DISABLED'
         authorization = 'AUTHORIZED' if gd.get('authorized') else 'not authorized'
         control = getattr(self, 'gripper_control', None)

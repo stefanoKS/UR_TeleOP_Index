@@ -169,6 +169,8 @@ The added tip link contains no physical tool geometry. Robot collision checks re
 
 Open **Settings → Gripper Setup** to connect read-only, capture real encoder endpoints, review travel, and save. Connection, diagnostics and saving work without a robot connection. Normal trigger follow requires **ENABLE GRIPPER**, a saved calibrated profile, the gripper heartbeat and deliberate trigger pickup; it does not require START TELEOP, A, Servo, the native controller or External Control. A release stops only arm demand. STOP GRIPPER withdraws target advancement and preserves holding torque; it does not guarantee a safe grasp. STOP ALL withdraws both subsystems. See [Gripper operation and supervised calibration](GRIPPER.md).
 
+A short VR/USB interruption now holds the gripper and resumes follow automatically after fresh Joy/pose/optical, heartbeat and motor feedback are verified, provided the original session stayed enabled and the interruption was within the configured window (2 s by default). Do not press/release the trigger to force recovery during that window. A longer interruption, STOP, or a fault displays **PICKUP REQUIRED**; move the trigger deliberately to re-engage. See [continuous-follow behavior](V6_3_GRIPPER_CONTINUOUS_FOLLOW.md).
+
 ### External Control program identity
 
 Use **Settings → External Control program** (or the Engineering button) to enter and verify the approved `.urp` and enable automatic Dashboard start. The override is saved atomically beside `real_teleop.yaml`. Verify that Dashboard reports the same loaded program before enabling automatic start. This panel never loads an unrelated program or commands motion.

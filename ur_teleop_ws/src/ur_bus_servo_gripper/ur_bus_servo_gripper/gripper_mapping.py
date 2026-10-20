@@ -42,6 +42,24 @@ class Follow:
         self.moved = self.active = False
         self.reference = self.last_sent = None
 
+    def commit(self, target):
+        # Only an acknowledged motor write may advance suppression state. A
+        # planned target rejected before transmission must be offered again.
+        self.last_sent = target
+
+    def resume(self, measured):
+        # Keep pickup continuity but rebase progression on fresh feedback. This
+        # never replays an old target and the next step remains rate/lead bounded.
+        c = self.config
+        if not c.min_ticks <= measured <= c.max_ticks:
+            raise EncoderFault(
+                'Measured encoder outside reviewed travel; inspect calibration before reconnect')
+        if not self.active:
+            return False
+        self.reference = float(measured)
+        self.last_sent = measured
+        return True
+
     def step(self, fraction, measured, dt):
         c = self.config
         if not c.min_ticks <= measured <= c.max_ticks:
@@ -73,6 +91,6 @@ class Follow:
         self.reference = max(measured - lead, min(measured + lead, self.reference))
         target = max(c.min_ticks, min(c.max_ticks, round(self.reference)))
         if abs(target - self.last_sent) >= c.threshold_ticks or (target == desired and target != self.last_sent):
-            self.last_sent = target
+            # Planned only; the worker commits after an acknowledged write.
             return target
         return None

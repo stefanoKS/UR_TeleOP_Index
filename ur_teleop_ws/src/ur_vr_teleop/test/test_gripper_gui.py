@@ -27,6 +27,21 @@ def test_valid_gripper_status_is_coalesced_for_tk_thread():
     assert len(items)==1 and items[0][1]=='gripper'
 
 
+def test_follow_state_text_never_hides_recovery_reason():
+    from ur_vr_teleop.gripper_diagnostics import follow_state_text
+    assert follow_state_text({'follow_state': 'FOLLOWING'}) == 'FOLLOWING'
+    paused = follow_state_text({'follow_state': 'SIGNAL_PAUSED', 'resume_pending': True})
+    assert 'SIGNAL LOST' in paused and 'auto-resume' in paused
+    assert 'RECOVERING SIGNAL' in follow_state_text({'follow_state': 'RECOVERY_VERIFYING'})
+    pickup = follow_state_text({'follow_state': 'PICKUP_REQUIRED',
+                                'recovery_reason': 'Interruption exceeded resume window'})
+    assert 'PICKUP REQUIRED' in pickup and 'exceeded' in pickup
+    assert follow_state_text({'communication_state': 'RETRYING'}).startswith('RECOVERING SERIAL')
+    assert follow_state_text({'fault_category': 'COMMUNICATION',
+                              'recovery_reason': 'serial timeout'}).startswith('COMMUNICATION FAULT')
+    assert follow_state_text({'fault_category': 'MOTOR'}).startswith('MOTOR FAULT')
+
+
 def test_stop_withdraws_calibration_consent_before_disarm():
     gui=OperatorGUI.__new__(OperatorGUI)
     gui.startup=Mock();gui.startup_request=None;gui.heartbeat=Mock();gui.call=Mock()

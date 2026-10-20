@@ -75,6 +75,33 @@ def performance_text(data, fresh=True):
             f"{' · ' + ' / '.join(timing) if timing else ''}\n{limitation}")
 
 
+def follow_state_text(data):
+    """Specific follow label; never collapse every hold into a pickup prompt."""
+    fault = data.get('fault_category')
+    reason = str(data.get('recovery_reason') or data.get('last_signal_loss_reason') or '')
+    if fault == 'COMMUNICATION':
+        return 'COMMUNICATION FAULT' + (f' — {reason}' if reason else '')
+    if fault == 'MOTOR':
+        return 'MOTOR FAULT' + (f' — {reason}' if reason else '')
+    if data.get('communication_state') == 'RETRYING':
+        return 'RECOVERING SERIAL FEEDBACK — HOLDING'
+    state = data.get('follow_state')
+    if state == 'FOLLOWING':
+        return 'FOLLOWING'
+    if state == 'SIGNAL_PAUSED':
+        return ('SIGNAL LOST — HOLDING (auto-resume pending)' if data.get('resume_pending')
+                else 'SIGNAL LOST — HOLDING (pickup required after recovery)')
+    if state == 'RECOVERY_VERIFYING':
+        return 'RECOVERING SIGNAL — VERIFYING HEALTHY INPUT'
+    if state == 'PICKUP_REQUIRED':
+        return 'PICKUP REQUIRED' + (f' — {reason}' if reason else '')
+    if state == 'DISABLED':
+        return 'DISABLED' + (f' — {reason}' if reason else '')
+    if state == 'FAULT':
+        return 'FAULT' + (f' — {reason}' if reason else '')
+    return 'WAITING FOR FRESH TRIGGER PICKUP'
+
+
 def fault_text(data):
     category = data.get('fault_category', 'NONE')
     if category in ('NONE', 'TEMPERATURE'):

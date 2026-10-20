@@ -73,8 +73,14 @@ def run():
             assert FakeDriver.writes and max(FakeDriver.writes)<=1670
             state['valid']=False;pump(.15);count=len(FakeDriver.writes);pump(.15)
             assert len(FakeDriver.writes)==count
-            state.update(valid=True,raw=0.);pump(.2)
-            assert not latest.get('following') and len(FakeDriver.writes)==count
+            assert latest['follow_state']=='SIGNAL_PAUSED',latest
+            assert latest['resume_pending'] is True
+            state.update(valid=True,raw=0.);pump(.35)
+            # Short verified interruption resumes without a new pickup.
+            assert latest['follow_state']=='FOLLOWING',latest
+            assert latest['recovery_count']>=1
+            assert len(FakeDriver.writes)>count
+            assert FakeDriver.writes[count]==1646  # fresh baseline, 4 ticks/cycle
             state['raw']=.5;pump(.2);state['raw']=1.;pump(.1)
             assert latest.get('following')
             state['stale']=True;pump(.15);count=len(FakeDriver.writes);pump(.15)
