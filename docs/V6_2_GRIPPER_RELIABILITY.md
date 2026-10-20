@@ -19,7 +19,7 @@ The original source was confirmed: `readTxRx(id, 56, 15)`, temperature at index 
 
 Verified the installed files byte-for-byte against the checksum-verified pinned archive. Reviewed `scservo_sdk` sources: `sms_sts.py`, `protocol_packet_handler.py`, `port_handler.py`, and `scservo_def.py`. The repository installer pins the Waveshare adapter archive SHA-256 `f39b7a07324b68571071ce8b36a8e1ded4da5215b77b883ea601dc8e7a21172b` (see [Gripper](GRIPPER.md#install-and-identify)).
 
-The SDK sends an eight-byte read request. Full feedback has a 21-byte reply; temperature alone has a seven-byte reply. It resynchronizes on `ff ff`, checks ID/length/error header ranges and an inverted-sum checksum, and skips other IDs. It does not verify that the received payload length equals the requested length. Some parser branches and continuous other-ID packets can avoid its timeout check. The adapter now validates exact packet length/ID and checks the existing monotonic deadline before every serial read. Partial data at timeout can be classified as SDK corruption or receive-deadline timeout depending on which check detects it first; neither yields feedback.
+The SDK sends an eight-byte read request. Full feedback has a 21-byte reply; temperature alone has a seven-byte reply. It resynchronizes on `ff ff`, checks ID/length/error header ranges and an inverted-sum checksum, and skips other IDs. It does not verify that the received payload length equals the requested length. Some parser branches and continuous other-ID packets can avoid its timeout check. The adapter now validates exact packet length/ID and checks the existing monotonic deadline before every serial read and before accepting a response. SDK busy-flag cleanup also runs on exceptions, so a missing-ID timeout cannot poison subsequent discovery transactions. Partial data at timeout can be classified as SDK corruption or receive-deadline timeout depending on which check detects it first; neither yields feedback.
 
 The stock clock is wall time, the stock timeout adds a 50 ms latency allowance, and stock `clearPort()` calls output drain. Existing overrides remain: monotonic clock, nonblocking reads, exclusive pyserial ownership, 20 ms receive timeout, 20 ms write timeout, and input-buffer flush. No unbounded drain or retry is added. A read can use up to the write deadline plus receive deadline, with additional OS scheduling delay; this is not a real-time guarantee. Shutdown retains its bounded eight-second worker join, and discovery remains cancellable between transactions. Tests exercise shutdown during a pending actual SDK read on a pseudo-terminal.
 
@@ -86,14 +86,14 @@ Validation used the rebuilt Humble overlay and system Python 3.10. Tests use fak
 | Executed command (repository root unless stated) | Result |
 |---|---|
 | `colcon build --base-paths src --packages-select ur_bus_servo_gripper ur_vr_teleop --executor sequential` (inside `ur_teleop_ws`, system PATH, Humble sourced) | Both packages built successfully |
-| `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_bus_servo_gripper/test ur_teleop_ws/src/ur_vr_teleop/test ur_teleop_ws/src/ur_vr_sim_teleop/test -q` | 575 passed; one existing upstream Python compatibility warning |
+| `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_bus_servo_gripper/test ur_teleop_ws/src/ur_vr_teleop/test ur_teleop_ws/src/ur_vr_sim_teleop/test -q` | 576 passed; one existing upstream Python compatibility warning |
 | `/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_vr_teleop/test/ros_integration_checks.py -q` | 91 passed |
 | `/usr/bin/python3 ur_teleop_ws/src/ur_bus_servo_gripper/test/ros_gripper_check.py` | Passed: independent follow, loss/STOP, schema, thermal inhibition, rejection, reconnect, new pickup; one node and no arm publisher |
 | `/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/gui_render_check.py` | Passed: actual Tk normal/unverified/transient/high/error text plus existing layout, settings and close checks; setup screenshot inspected |
 | `/usr/bin/python3 -m compileall -q ur_teleop_ws/src/ur_bus_servo_gripper/ur_bus_servo_gripper ur_teleop_ws/src/ur_vr_teleop/ur_vr_teleop` | Passed |
-| `git diff --check`; changed-document relative file/anchor checks | Passed; no Mermaid diagrams changed |
+| `git diff --check`; changed-document relative file/anchor checks | Passed (36 links/anchors); no Mermaid diagrams changed |
 
-Development failures were corrected rather than suppressed: the former immediate-overtemperature assertion was updated for the intentional new state machine; new active-follow tests were corrected to count only writes after the suspicious sample; incomplete packets accept either SDK corruption or hard-deadline timeout classification. An intermediate GUI helper quoting error caused collection/byte-compilation failure; it was corrected and the overlay rebuilt before successful validation.
+Development failures were corrected rather than suppressed: the former immediate-overtemperature assertion was updated for the intentional new state machine; new active-follow tests were corrected to count only writes after the suspicious sample; incomplete packets accept either SDK corruption or hard-deadline timeout classification. An intermediate GUI helper quoting error caused collection/byte-compilation failure; it was corrected and the overlay rebuilt before successful validation. One final Tk run failed the existing window-visibility assertion at line 270 after the temperature display checks; an unchanged rerun passed all layouts and close checks. The intermittent visibility failure cause was not established.
 
 Unchanged C++ controller/bridge suites and separate Servo/native smoothing integration were not rerun; no files in those control paths changed. No physical validation, managed production desktop launch or hardware movement was performed.
 
@@ -112,3 +112,18 @@ Unchanged C++ controller/bridge suites and separate Servo/native smoothing integ
 - `ur_teleop_ws/src/ur_vr_teleop/test/`: `test_gripper_gui.py`, `gui_render_check.py`.
 
 The delivery commit SHA is provided with the final handoff; this report is part of that commit.
+
+
+### Measured pseudo-terminal timing (2026-10-20)
+
+These measurements use a simulated servo on a Linux pseudo-terminal, not the USB adapter or physical motor. Baseline includes the initial connection feedback. Each delayed transaction adds an intentional 8 ms responder delay. Baseline and delayed runs had zero RX timeouts/corruption; separate negative tests intentionally inject timeout/corruption and verify classification.
+
+| Transaction | Baseline count | Baseline mean ms | Baseline maximum ms | With 8 ms injected delay, ms |
+|---|---:|---:|---:|---:|
+| feedback | 101 | 0.098 | 0.798 | 8.279 |
+| temperature | 100 | 0.112 | 1.549 | 8.197 |
+| write | 100 | 0.093 | 0.712 | 8.262 |
+
+The separate 60 ms delayed-response test correctly times out, and a continuous stream of other-ID packets cannot evade the receive deadline. Discovery across all 254 candidate IDs succeeds with one simulated servo and 253 missing-ID timeouts, then leaves the SDK port flag free. Actual USB mean/worst latency, timeout frequency and power/sensor integrity remain **PENDING**. These simulated observations justify the bounded implementation/tests, not the physical adequacy of a 20 ms deadline.
+
+Implementation commit: `d0239307e731ad3959279d1ae2a4221137cb3eb8`. Final validation evidence is recorded in the subsequent documentation commit.
