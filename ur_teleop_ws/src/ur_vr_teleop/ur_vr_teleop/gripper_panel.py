@@ -1,7 +1,7 @@
 """Tk-only calibration editor; ROS requests and persistence stay asynchronous."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from .gripper_diagnostics import temperature_text, serial_text
+from .gripper_diagnostics import fault_text, temperature_text, serial_text
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -149,7 +149,7 @@ class GripperPanel:
             f"Servo ID: {data.get('identity', {}).get('servo_id', '—')}  "
             f"Session enabled: {data.get('session_enabled', False) if fresh else False}\n"
             f"Current Position: {fb.get('ticks', 'unavailable')} ticks\n"
-            f"{temperature_text(data, fresh)}\n{serial_text(data)}\n"
+            f"{temperature_text(data, fresh)}\n{fault_text(data)}\n{serial_text(data)}\n"
             f"Last fault/warning: {data.get('last_fault_reason', 'none')}\n"
             f"Raw trigger: {data.get('raw_trigger')} · Observed range: {data.get('observed_trigger_range')}\n{data.get('reason', '')}")
         if self.future and self.future[1].done():

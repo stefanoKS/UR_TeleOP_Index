@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from glob import glob
 import time
 from .serial_diagnostics import Diagnostics, TransportError
+from .faults import DeviceConfigurationFault, GripperFault, MechanicalFault
 
 
 @dataclass(frozen=True)
@@ -150,13 +151,14 @@ class Driver:
             high = self.transaction('configuration', lambda: self.packet.read2ByteTxRx(self.servo_id, 11))
             phase = self.transaction('configuration', lambda: self.packet.read1ByteTxRx(self.servo_id, 18))
             if mode != 0 or resolution != 1 or not 0 <= low < high <= 4095:
-                raise IOError('Requires reviewed single-turn mode 0, resolution 1, nonzero angle range'
-                              f' (detected mode={mode}, resolution={resolution}, range={low}..{high})')
+                raise DeviceConfigurationFault(
+                    'Requires reviewed single-turn mode 0, resolution 1, nonzero angle range'
+                    f' (detected mode={mode}, resolution={resolution}, range={low}..{high})')
             if self.config.enabled and not low <= self.config.min_ticks <= self.config.max_ticks <= high:
-                raise IOError('Calibration exceeds servo angle limits')
+                raise DeviceConfigurationFault('Calibration exceeds servo angle limits')
             torque = self.transaction('configuration', lambda: self.packet.read1ByteTxRx(self.servo_id, 40))
             if torque not in (0, 1):
-                raise IOError('Unsupported torque state; engineering review required')
+                raise DeviceConfigurationFault('Unsupported torque state; engineering review required')
             self.torque_enabled = torque == 1
             self.identity = dict(port=path, servo_id=self.servo_id, model=model,
                                  mode=mode, resolution=resolution, phase=phase,
@@ -164,7 +166,7 @@ class Driver:
             return self.read()
         except Exception as error:
             self.close()
-            if isinstance(error, IOError) and str(error):
+            if isinstance(error, (GripperFault, IOError)) and str(error):
                 raise
             raise IOError(friendly_error(error)) from error
 
@@ -228,7 +230,7 @@ class Driver:
     def write(self, ticks, calibration=False):
         c = self.config.validate(calibrated=True)
         if type(ticks) is not int or not c.min_ticks <= ticks <= c.max_ticks:
-            raise ValueError('Target outside reviewed travel')
+            raise MechanicalFault('Target outside reviewed travel')
         self.transaction("write", lambda: self.packet.WritePosEx(self.servo_id, ticks,
                 min(c.speed, 50) if calibration else c.speed, min(c.acceleration, 5) if calibration else c.acceleration))
         if not self.torque_enabled:

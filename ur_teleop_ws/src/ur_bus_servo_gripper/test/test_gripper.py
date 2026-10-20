@@ -9,6 +9,9 @@ from ur_bus_servo_gripper.gripper_mapping import normalize, target_ticks, Follow
 from ur_bus_servo_gripper.gripper_worker import Worker
 from ur_bus_servo_gripper.gripper_calibration import jog_target, stationary_disarmed
 from ur_bus_servo_gripper.st3215_driver import Feedback, Driver, checked, signed
+from ur_bus_servo_gripper.faults import (ConfigurationFault, MechanicalFault,
+                                        MotorFault)
+from ur_bus_servo_gripper.serial_diagnostics import TransportError
 
 
 @pytest.fixture
@@ -282,8 +285,54 @@ def test_worker_fault_and_join_remain_responsive(tmp_path,config):
             time.sleep(.005)
         assert w.snapshot()['connection']=='Fault'
         assert not w.snapshot()['feedback_valid']
+        assert w.snapshot()['fault_category']=='COMMUNICATION'
+        assert w.temperature.state=='NORMAL'
     finally:w.close()
     assert not w.thread.is_alive()
+
+
+@pytest.mark.parametrize('error,category', [
+    (TransportError('rx_timeouts','motor feedback timeout',-6),'COMMUNICATION'),
+    (TransportError('rx_corruption','checksum failure',-7),'COMMUNICATION'),
+    (MotorFault('device status 0x04'),'MOTOR'),
+    (MechanicalFault('commanded position not reached; check obstruction'),'MECHANICAL'),
+    (ConfigurationFault('review calibrated travel and motor ID'),'CONFIGURATION'),
+    (RuntimeError('unexpected worker failure'),'UNKNOWN'),
+])
+def test_fault_categories_inhibit_without_temperature_misclassification(worker,error,category):
+    engage(worker);drive(worker,1.)
+    writes=list(FakeDriver.writes)
+    worker.calibration_target=1700
+    worker.action=('open',time.monotonic())
+    worker.handle_fault(error)
+    status=worker.snapshot()
+    assert status['fault_category']==category
+    assert status['last_fault_reason']==str(error)
+    assert status['status']=='Fault' and not status['authorized']
+    assert not worker.session_enabled and worker.driver is None
+    assert worker.action is None and worker.calibration_target is None
+    assert not worker.follow.active and worker.temperature.state=='NORMAL'
+    assert FakeDriver.writes==writes
+
+
+def test_encoder_deviation_is_mechanical(worker):
+    worker.update('calibration',True)
+    worker.request('jog_close');worker.step()
+    worker.driver.read=lambda: Feedback(1700,0,0,12.,35,0,0,False,time.monotonic())
+    with pytest.raises(MechanicalFault) as caught:
+        worker.now[0]+=.04;worker.update('calibration',True);worker.step()
+    worker.handle_fault(caught.value)
+    assert worker.snapshot()['fault_category']=='MECHANICAL'
+    assert worker.temperature.state=='NORMAL' and not FakeDriver.writes
+
+
+def test_invalid_runtime_configuration_is_configuration_fault(worker):
+    worker.config=replace(worker.config,servo_id=-1)
+    with pytest.raises(ConfigurationFault) as caught:
+        drive(worker,.5)
+    worker.handle_fault(caught.value)
+    assert worker.snapshot()['fault_category']=='CONFIGURATION'
+    assert worker.temperature.state=='NORMAL' and not FakeDriver.writes
 
 
 def test_external_encoder_displacement_never_creates_target_jump(config):
@@ -304,6 +353,15 @@ def test_feedback_outside_reviewed_travel_faults_before_pickup(config):
     f=Follow(config)
     with pytest.raises(ValueError,match='outside reviewed travel'):f.step(.5,2500,.04)
     assert not f.active and f.last_sent is None
+
+
+def test_feedback_outside_reviewed_travel_is_worker_mechanical_fault(worker):
+    worker.driver.read=lambda: Feedback(2500,0,0,12.,35,0,0,False,time.monotonic())
+    with pytest.raises(ValueError) as caught:
+        drive(worker,.5)
+    worker.handle_fault(caught.value)
+    assert worker.snapshot()['fault_category']=='MECHANICAL'
+    assert worker.temperature.state=='NORMAL' and not FakeDriver.writes
 
 
 def test_follow_needs_no_arm_backend_at_all(worker):

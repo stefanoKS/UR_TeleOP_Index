@@ -31,3 +31,20 @@ def serial_text(data):
     counters = data.get('serial_diagnostics', {}).get('counters', {})
     return ('Serial: ' + ' · '.join(f'{name}={counters.get(name, 0)}' for name in
             ('rx_timeouts', 'rx_corruption', 'invalid_responses', 'motor_errors', 'reconnects')))
+
+
+def fault_text(data):
+    category = data.get('fault_category', 'NONE')
+    if category in ('NONE', 'TEMPERATURE'):
+        return ''
+    reason = str(data.get('last_fault_reason') or data.get('reason') or 'Reason unavailable')
+    titles = {
+        'COMMUNICATION': 'ST3215 COMMUNICATION FAULT',
+        'MOTOR': 'ST3215 MOTOR FAULT',
+        'MECHANICAL': 'ST3215 MECHANICAL FAULT',
+        'CONFIGURATION': 'ST3215 CONFIGURATION ERROR',
+        'UNKNOWN': 'ST3215 INTERNAL FAULT',
+    }
+    title = titles.get(category, titles['UNKNOWN'])
+    suffix = '; movement inhibited; inspect application log' if category == 'UNKNOWN' else ''
+    return f'{title} — {reason}{suffix}'

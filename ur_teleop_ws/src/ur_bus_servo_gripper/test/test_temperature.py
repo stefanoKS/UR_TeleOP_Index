@@ -84,6 +84,24 @@ def test_motor_fault_is_immediate(worker, status):
     assert worker.temperature.state != 'TEMPERATURE_UNVERIFIED'
 
 
+def test_motor_fault_during_confirmation_is_not_temperature_fault(worker):
+    sample(worker,35);sample(worker,107)
+    worker.driver.read_temperature=lambda:(35,time.monotonic())
+    drive(worker,1.)
+    worker.driver.read=lambda: Feedback(1650,0,2,12.,36,3,4,False,time.monotonic())
+    with pytest.raises(IOError,match='Motor fault') as caught:
+        drive(worker,1.)
+    worker.handle_fault(caught.value)
+    assert worker.snapshot()['fault_category']=='MOTOR'
+    assert worker.temperature.state=='TEMPERATURE_UNVERIFIED'
+    assert not FakeDriver.writes
+    worker.request('connect');worker.step()
+    assert worker.temperature.state=='NORMAL'
+    assert worker.snapshot()['fault_category']=='MOTOR'  # Historical until fresh status.
+    drive(worker,.5)
+    assert worker.snapshot()['fault_category']=='NONE' and not FakeDriver.writes
+
+
 def test_hundreds_normal_cycles(worker):
     for _ in range(500):
         sample(worker, 35)

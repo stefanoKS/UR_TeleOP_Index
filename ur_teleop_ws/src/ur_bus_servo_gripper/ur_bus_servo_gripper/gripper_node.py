@@ -183,6 +183,7 @@ class GripperNode(Node):
             status.update(feedback_valid=False, status='Fault', reason='Serial feedback stale; reconnect required')
         stamp = self.get_clock().now().to_msg()
         status['schema_version'] = 2
+        status.setdefault('fault_category', 'NONE')
         status['observed_trigger_range'] = [self.trigger_min, self.trigger_max]
         status['stamp'] = {'sec': stamp.sec, 'nanosec': stamp.nanosec}
         if fb and status.get('feedback_valid') and fb['received_at'] != self.last_feedback:

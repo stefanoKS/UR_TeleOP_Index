@@ -32,7 +32,7 @@ Independent temperature reads use `readTxRx(id, 63, 1)` on the same serial owner
 | `NORMAL` | Fresh valid below-limit feedback permits existing authorization and pickup logic. |
 | `TEMPERATURE_UNVERIFIED` | First at/above-limit reading withdraws session permission, clears pending motion/pickup/calibration and immediately blocks writes. Next worker cycle reads register 63 once. If normal, the next cycle reads the full feedback block once. |
 | `TEMPERATURE_CONFIRMED_HIGH` | An independent at/above-limit value latches high temperature; close the link without torque release. Cool and inspect before deliberate read-only Connect. |
-| `SENSOR_OR_COMMUNICATION_FAULT` | Failed, stale, malformed or overdue confirmation never implies normal temperature; close the link and require controlled Connect. Other worker faults also withdraw permission and retain their exact fault reason. |
+| `SENSOR_OR_COMMUNICATION_FAULT` | Failed, stale, malformed or overdue temperature confirmation never implies normal temperature; close the link and require controlled Connect. Ordinary communication, motor, mechanical, configuration and unknown worker faults do not enter this thermal state. |
 | `RECOVERY_REQUIRED` | Both confirmation reads below limit indicate a suspected transient, not proof of its cause. Retain warning and inhibit; deliberately Connect read-only before ENABLE. |
 
 Confirmation has at most two additional reads, one per worker cycle, and a 250 ms overall freshness/deadline budget. A register confirmation at/above limit needs no further read. A nonzero motor status/error faults immediately, including during confirmation. No retries continue after a failed confirmation. Repeated Connect cannot bypass an unfinished confirmation. Pending motion requests are discarded, not released later.
@@ -43,6 +43,7 @@ Confirmation has at most two additional reads, one per worker cycle, and a 250 m
 
 Existing topics/services and fields remain. `/gripper/status` adds:
 
+- `fault_category`: `NONE`, `TEMPERATURE`, `COMMUNICATION`, `MOTOR`, `MECHANICAL`, `CONFIGURATION` or `UNKNOWN`. It describes the current/retained worker fault independently of thermal history and preserves schema version 2.
 - `temperature`: `state`, `verified_temperature_c`, monotonic `verified_at`, `suspicious_temperature_c`, `confirmation_readings`, `reason`. Verified history is not necessarily current feedback.
 - `serial_diagnostics.counters`: successful `feedback_reads`, `rx_timeouts`, `rx_corruption`, `invalid_responses`, `motor_errors`, `other_errors`, `suspicious_temperatures`, `confirmed_high_events`, successful `connections`, subsequent `reconnects`, `disconnects`, `consecutive_failures`.
 - `serial_diagnostics.timings`: count, mean, maximum and latest duration in ms for feedback, independent temperature, position-write, torque-write, ping and configuration-read transactions. Discovery timeout counts include unanswered candidate IDs; establish the hardware observation baseline after discovery. Write timings include response acknowledgment, not just wire transmission.
@@ -51,7 +52,15 @@ Existing topics/services and fields remain. `/gripper/status` adds:
 - `last_temperature_event`: original feedback (including raw 15 bytes, decoded voltage, ticks, current/load, status and monotonic receipt), previous verified temperature, original transaction, wall timestamp, validation results and latest confirmation transaction. Retained across reconnects.
 - Feedback adds `raw_bytes` and `transaction_ms`. Existing `feedback_valid` is false while temperature is unverified or latched; no suspect joint feedback is published as healthy. Diagnostic history must not be treated as a current measurement.
 
-The dashboard and Gripper Setup share temperature wording. Unknown, confirmed-high and suspected-transient states are distinct; historical temperatures are labelled. Setup shows communication counters. A previous suspect value remains visible after healthy reconnect. Existing authoritative STOP acknowledgment behavior is unchanged.
+The dashboard and Gripper Setup share category-aware wording and the original reason. Confirmed-high, suspected-transient and failed-confirmation states remain distinct; historical temperatures are labelled. Mechanical/configuration/motor/unknown faults are never displayed as thermal faults. Setup shows communication counters. A previous suspect value remains visible after healthy reconnect. Existing authoritative STOP acknowledgment behavior is unchanged.
+
+## Final fault-classification correction
+
+The former worker catch-all called `Temperature.fail()` for nearly every exception. That made stalls, encoder deviations, invalid calibration, nonzero motor status and unexpected exceptions appear as `SENSOR_OR_COMMUNICATION_FAULT`. Faults are now typed at their owning boundary and a single fail-safe handler records the category and original reason while withdrawing the session, pending calibration and pickup before disconnecting. Transport failures during temperature confirmation still fail that confirmation; transport failures during ordinary feedback remain `COMMUNICATION`. Motor status during confirmation remains `MOTOR`.
+
+All categories prevent new position writes, retain the existing torque/last-target policy, reject stale authorization, require deliberate recovery and never replay an old target. This correction does not change the temperature limit, 20 ms packet timeout, gripper travel/speed/acceleration, Index mapping, arm path, Servo, Ruckig or Dashboard program control.
+
+Final correction validation on `ef630aecd6f452024dec69639a622503f2c74af9` plus this focused change used system Python and the rebuilt Humble overlay: 121 gripper fake-hardware/pseudo-terminal tests passed; the combined gripper, teleop and simulator suite passed 592 tests with one unchanged Python compatibility warning; 91 isolated ROS integration tests passed; the fake-motor gripper ROS lifecycle and real-Tk three-layout rendering checks passed. Both affected ROS packages built successfully. No physical USB, motor, load-retention or temperature validation was performed. The older validation table below is retained as historical V6.2 implementation evidence.
 
 ## Supervised read-only hardware diagnostic procedure — PENDING
 

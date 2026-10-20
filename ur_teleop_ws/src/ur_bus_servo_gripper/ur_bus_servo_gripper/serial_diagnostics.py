@@ -1,11 +1,13 @@
 """Fixed-memory serial statistics and rare-event evidence (single worker owner)."""
 from collections import deque
 import time
+from .faults import FaultCategory, GripperFault
 
 
-class TransportError(IOError):
+class TransportError(GripperFault, IOError):
     def __init__(self, category, message, communication=None, motor_error=0):
-        super().__init__(message)
+        fault_category = FaultCategory.MOTOR if motor_error else FaultCategory.COMMUNICATION
+        super().__init__(fault_category, message)
         self.category, self.communication, self.motor_error = category, communication, motor_error
 
 

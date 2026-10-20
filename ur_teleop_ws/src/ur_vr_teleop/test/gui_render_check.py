@@ -84,6 +84,18 @@ def run():
             pump(.12)
             assert label in panel.telemetry.get(), panel.telemetry.get()
             assert label in gui.gripper_text.get(), gui.gripper_text.get()
+        for category, label, reason in [
+                ('COMMUNICATION','ST3215 COMMUNICATION FAULT','motor feedback timeout'),
+                ('MOTOR','ST3215 MOTOR FAULT','device status 0x04'),
+                ('MECHANICAL','ST3215 MECHANICAL FAULT','commanded position not reached'),
+                ('CONFIGURATION','ST3215 CONFIGURATION ERROR','review calibrated travel'),
+                ('UNKNOWN','ST3215 INTERNAL FAULT','unexpected worker failure')]:
+            gui.gripper_data.update(fault_category=category,last_fault_reason=reason,
+                temperature=dict(state='NORMAL'),feedback_valid=False,reason=reason)
+            gui.gripper_at=time.monotonic()
+            pump(.12)
+            assert label in panel.telemetry.get() and reason in panel.telemetry.get()
+            assert label in gui.gripper_text.get() and reason in gui.gripper_text.get()
         panel.canvas.yview_moveto(0);pump(.05)
         x,y=panel.window.winfo_rootx(),panel.window.winfo_rooty()
         ImageGrab.grab(bbox=(x,y,x+panel.window.winfo_width(),y+panel.window.winfo_height())).save('/tmp/ur_teleop_gripper_panel.png')

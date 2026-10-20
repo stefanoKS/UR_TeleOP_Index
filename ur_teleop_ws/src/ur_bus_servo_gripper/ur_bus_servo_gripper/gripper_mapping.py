@@ -1,5 +1,6 @@
 """Pure mapping and pickup logic. A is deliberately absent from this module."""
 import math
+from .faults import EncoderFault
 
 
 def normalize(raw, config):
@@ -45,7 +46,8 @@ class Follow:
         c = self.config
         if not c.min_ticks <= measured <= c.max_ticks:
             self.reset()
-            raise ValueError('Measured encoder outside reviewed travel; inspect calibration before reconnect')
+            raise EncoderFault(
+                'Measured encoder outside reviewed travel; inspect calibration before reconnect')
         if not self.active:
             if self.initial is None:
                 self.initial = fraction
@@ -57,7 +59,8 @@ class Follow:
                 self.last_sent = measured
             return None
         if abs(measured - self.last_sent) > 20:
-            raise ValueError('Encoder moved outside commanded lead; inspect mechanism and reconnect')
+            raise EncoderFault(
+                'Encoder moved outside commanded lead; inspect mechanism and reconnect')
         desired = target_ticks(fraction, c)
         bound = c.rate_ticks_s * max(0., min(.04, dt))
         self.reference += max(-bound, min(bound, desired - self.reference))

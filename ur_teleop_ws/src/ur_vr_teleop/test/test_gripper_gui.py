@@ -147,3 +147,22 @@ def test_temperature_normal_and_stale_display():
     data['feedback']['received_at']-=1
     assert '35 °C' not in temperature_text(data)
     assert 'rx_timeouts=2' in serial_text(dict(serial_diagnostics=dict(counters=dict(rx_timeouts=2))))
+
+
+@pytest.mark.parametrize('category,label,reason', [
+    ('COMMUNICATION','ST3215 COMMUNICATION FAULT','motor feedback timeout'),
+    ('MOTOR','ST3215 MOTOR FAULT','device status 0x04'),
+    ('MECHANICAL','ST3215 MECHANICAL FAULT','commanded position not reached; check obstruction'),
+    ('CONFIGURATION','ST3215 CONFIGURATION ERROR','review calibrated travel and motor ID'),
+    ('UNKNOWN','ST3215 INTERNAL FAULT','unexpected worker failure'),
+])
+def test_fault_category_presentation_preserves_reason(category,label,reason):
+    from ur_vr_teleop.gripper_diagnostics import fault_text
+    text=fault_text(dict(fault_category=category,last_fault_reason=reason))
+    assert label in text and reason in text and 'READY' not in text
+    if category=='UNKNOWN':assert 'movement inhibited' in text and 'application log' in text
+
+
+def test_temperature_fault_does_not_get_unrelated_fault_label():
+    from ur_vr_teleop.gripper_diagnostics import fault_text
+    assert fault_text(dict(fault_category='TEMPERATURE',last_fault_reason='confirmed high'))==''

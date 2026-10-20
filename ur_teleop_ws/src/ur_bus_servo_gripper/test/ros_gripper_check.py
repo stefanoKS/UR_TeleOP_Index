@@ -88,6 +88,7 @@ def run():
             state['heartbeat']=True;pump(.25)
             set_enabled(True);set_enabled(False)
             assert latest['schema_version']==2 and 'serial_diagnostics' in latest
+            assert latest['fault_category']=='NONE'
             assert node.count_publishers('/gripper/status')==1
             FakeDriver.temperature=107
             deadline=time.monotonic()+1
