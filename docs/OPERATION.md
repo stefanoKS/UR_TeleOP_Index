@@ -172,3 +172,5 @@ Open **Settings → Gripper Setup** to connect read-only, capture real encoder e
 ### External Control program identity
 
 Use **Settings → External Control program** (or the Engineering button) to enter and verify the approved `.urp` and enable automatic Dashboard start. The override is saved atomically beside `real_teleop.yaml`. Verify that Dashboard reports the same loaded program before enabling automatic start. This panel never loads an unrelated program or commands motion.
+
+For ST3215 temperature warnings, follow the [V6.2 gripper recovery procedure](V6_2_GRIPPER_RELIABILITY.md#temperature-policy). Normal confirmation never resumes motion: review the warning, Connect read-only, explicitly ENABLE GRIPPER and repeat trigger pickup.

@@ -143,7 +143,11 @@ class GripperNode(Node):
                 response.success = False
                 response.message = 'Duplicate gripper node or serial owner detected; follow not enabled'
                 return response
-        self.worker.update('session_enabled', bool(request.data))
+        accepted = self.worker.update('session_enabled', bool(request.data))
+        if accepted is False:
+            response.success = False
+            response.message = 'Gripper feedback/temperature recovery required; inspect status and Connect read-only before ENABLE'
+            return response
         response.success = True
         response.message = ('Gripper session enabled; move the trigger >=5% to pick up'
                             if request.data else

@@ -25,6 +25,7 @@ from .dashboard_state import (ParameterState, Notifications, equivalent, boolean
 from .dashboard_process import ManagerWorker
 from .dashboard_ros import RosDataBridge, RosExecutorThread
 from .gripper_control import GripperControl
+from .gripper_diagnostics import temperature_text
 from .program_control import ProgramConfig, ProgramStartup, load_program_config, same_program
 from .startup import Startup
 
@@ -1316,7 +1317,8 @@ class OperatorGUI:
         control_message = control.message if control is not None else 'Gripper control unavailable'
         self.gripper_text.set(
             f"{gd.get('connection', 'Disconnected')} · ST3215 ID {gd.get('identity', {}).get('servo_id', '—')}\n"
-            f"Encoder {gf.get('ticks', '—')} ticks · Motor {gf.get('motor_status', '—')} · {gf.get('temperature_c', '—')} °C\n"
+            f"Encoder {gf.get('ticks', '—')} ticks · Motor {gf.get('motor_status', '—')}\n"
+            f"{temperature_text(gd, fresh_gripper)}\n"
             f"Trigger {percent} · Desired {desired} · Target {gd.get('commanded_ticks', '—')}"
             f" · {trigger_state}\nSession: {session} · {authorization} · {gd.get('status', 'Unavailable')}\n"
             f"Control: {control_state} — {control_message}\n{str(gd.get('reason', ''))[:160]}")

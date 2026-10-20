@@ -123,3 +123,27 @@ def test_stop_all_beats_pending_enable_and_late_ack_is_ignored():
     gui.poll_gripper_requests(time.monotonic())
     assert gui.gripper_control.state == 'STOPPING'
     assert gui.gripper_heartbeat_allowed is False
+
+
+@pytest.mark.parametrize('state,label', [
+    ('TEMPERATURE_UNVERIFIED','TEMPERATURE UNVERIFIED'),
+    ('TEMPERATURE_CONFIRMED_HIGH','OVER-TEMPERATURE'),
+    ('RECOVERY_REQUIRED','suspected temperature spike'),
+    ('SENSOR_OR_COMMUNICATION_FAULT','FEEDBACK ERROR')])
+def test_temperature_fault_presentation(state,label):
+    from ur_vr_teleop.gripper_diagnostics import temperature_text
+    data=dict(feedback_valid=False,temperature=dict(state=state,
+        verified_temperature_c=35,suspicious_temperature_c=107,confirmation_readings=[35,36]))
+    text=temperature_text(data)
+    assert label in text and 'movement inhibited' in text and 'historical' in text
+    assert '107' in text and '35, 36' in text and 'READY' not in text
+    assert 'stale' in temperature_text(data,False)
+
+
+def test_temperature_normal_and_stale_display():
+    from ur_vr_teleop.gripper_diagnostics import temperature_text,serial_text
+    data=dict(feedback_valid=True,feedback=dict(temperature_c=35,received_at=time.monotonic()))
+    assert '35 °C' in temperature_text(data)
+    data['feedback']['received_at']-=1
+    assert '35 °C' not in temperature_text(data)
+    assert 'rx_timeouts=2' in serial_text(dict(serial_diagnostics=dict(counters=dict(rx_timeouts=2))))

@@ -340,3 +340,5 @@ V6.1 stabilization evidence and actual pass counts are recorded in [V6.1 report]
 2. Press START TELEOP; confirm Dashboard check/load/play, reverse-interface connection, and no unintended motion on program start.
 3. Confirm Local Control and protective-stop refusals, STOP during startup, recovery after program interruption, and Dashboard Stop before ROS shutdown.
 4. The operator reports that the earlier wrist/arm oscillation disappeared after the Servo position-history correction; a separately documented post-fix physical measurement was not available in this audit. Treat any recurrence as a new observation requiring supervised investigation, not as proof that the correction failed or that all filtering was removed.
+
+V6.2 adds bounded temperature confirmation, strict serial response checks and diagnostic counters. See [V6.2 evidence and pending hardware procedure](V6_2_GRIPPER_RELIABILITY.md). Run the gripper pytest suite, independent `ros_gripper_check.py` and Tk `gui_render_check.py` after rebuilding both Python packages.

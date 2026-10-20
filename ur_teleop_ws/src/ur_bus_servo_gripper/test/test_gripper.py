@@ -249,7 +249,9 @@ def test_calibration_trigger_requires_pickup_and_retires_on_input_loss(worker):
 def test_motor_overtemperature_and_status_stop_before_write(worker):
     engage(worker)
     worker.driver.read=lambda: Feedback(1650,0,0,12.,70,0,0,False,time.monotonic())
-    with pytest.raises(IOError,match='temperature'):drive(worker,1.)
+    drive(worker,1.)
+    assert worker.temperature.state == 'TEMPERATURE_UNVERIFIED'
+    assert not worker.session_enabled
     assert not FakeDriver.writes
 
 

@@ -71,7 +71,20 @@ def run():
         pending=Future();panel.ros_future=pending;pump(.4)
         assert panel.window.winfo_exists() and 'unavailable' in panel.telemetry.get()
         panel.ros_future=None
-        panel.canvas.yview_moveto(1);pump(.1)
+        for thermal_state, label in [('NORMAL','temperature 35'),
+                ('TEMPERATURE_UNVERIFIED','TEMPERATURE UNVERIFIED'),
+                ('TEMPERATURE_CONFIRMED_HIGH','OVER-TEMPERATURE'),
+                ('RECOVERY_REQUIRED','suspected temperature spike'),
+                ('SENSOR_OR_COMMUNICATION_FAULT','FEEDBACK ERROR')]:
+            gui.gripper_data.update(temperature=dict(state=thermal_state,
+                verified_temperature_c=35,suspicious_temperature_c=107,
+                confirmation_readings=[35,36]), feedback_valid=thermal_state=='NORMAL',
+                feedback=dict(ticks=1650,temperature_c=35,received_at=time.monotonic()))
+            gui.gripper_at=time.monotonic()
+            pump(.12)
+            assert label in panel.telemetry.get(), panel.telemetry.get()
+            assert label in gui.gripper_text.get(), gui.gripper_text.get()
+        panel.canvas.yview_moveto(0);pump(.05)
         x,y=panel.window.winfo_rootx(),panel.window.winfo_rooty()
         ImageGrab.grab(bbox=(x,y,x+panel.window.winfo_width(),y+panel.window.winfo_height())).save('/tmp/ur_teleop_gripper_panel.png')
         panel.close();assert panel.closed

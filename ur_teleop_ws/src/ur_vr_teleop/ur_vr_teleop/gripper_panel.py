@@ -1,6 +1,7 @@
 """Tk-only calibration editor; ROS requests and persistence stay asynchronous."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from .gripper_diagnostics import temperature_text, serial_text
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -142,10 +143,14 @@ class GripperPanel:
         data = self.gui.gripper_data
         fresh = time.monotonic() - self.gui.gripper_at < .25
         fb = data.get('feedback', {}) if fresh and data.get('feedback_valid') else {}
+        if data.get('temperature', {}).get('state', 'NORMAL') != 'NORMAL':
+            self.authorized.set(False)
         self.telemetry.set(f"Connection: {data.get('connection', 'Disconnected') if fresh else 'Disconnected'}  "
             f"Servo ID: {data.get('identity', {}).get('servo_id', '—')}  "
             f"Session enabled: {data.get('session_enabled', False) if fresh else False}\n"
             f"Current Position: {fb.get('ticks', 'unavailable')} ticks\n"
+            f"{temperature_text(data, fresh)}\n{serial_text(data)}\n"
+            f"Last fault/warning: {data.get('last_fault_reason', 'none')}\n"
             f"Raw trigger: {data.get('raw_trigger')} · Observed range: {data.get('observed_trigger_range')}\n{data.get('reason', '')}")
         if self.future and self.future[1].done():
             action, future = self.future

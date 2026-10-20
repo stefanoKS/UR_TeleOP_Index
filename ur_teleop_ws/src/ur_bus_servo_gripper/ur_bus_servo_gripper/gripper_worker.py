@@ -12,6 +12,8 @@ from .gripper_config import Config, load
 from .gripper_mapping import Follow, normalize, target_ticks
 from .gripper_calibration import jog_target
 from .st3215_driver import Driver
+from .temperature import Temperature
+from .serial_diagnostics import Diagnostics
 
 
 
@@ -29,6 +31,12 @@ class Worker:
         self.driver = self.feedback = None
         self.config = Config()
         self.follow = Follow(self.config)
+        self.temperature = Temperature(self.config.temperature_limit)
+        self.diagnostics = Diagnostics()
+        self.recovery_needed = False
+        self.setup_lockout = False
+        self.last_temperature_event = None
+        self.last_fault_reason = ''
         self.commanded = self.command_at = None
         self.attempted_ticks = self.attempt_at = None
         self.write_acknowledged = None
@@ -45,10 +53,16 @@ class Worker:
         with self.lock:
             if key == 'session_enabled':
                 value = bool(value)
+                if value and (self.temperature.state != 'NORMAL' or
+                        (self.recovery_needed and (self.feedback is None or
+                         not 0 <= time.monotonic()-self.feedback.received_at < .25))):
+                    return False
                 if value != self.session_enabled:
                     self.session_enabled = value
                     self.epoch += 1
-                return
+                return True
+            if key == "calibration" and value is False:
+                self.setup_lockout = False
             now = time.monotonic()
             old, at = self.inputs.get(key, (None, -float('inf')))
             if (now - at >= .25 or ((value is False or value is None) and value != old) or
@@ -78,6 +92,7 @@ class Worker:
 
     def disconnect(self):
         if self.driver:
+            self.diagnostics.counters["disconnects"] += 1
             try:
                 self.driver.close()
             except OSError:
@@ -87,6 +102,84 @@ class Worker:
         self.calibration_target = None
         self.commanded = self.command_at = None
         self.calibration_follow = False
+
+    def inhibit(self):
+        # Retire all intent before any confirmation read. STOP/update can run
+        # concurrently with serial I/O; nothing here restores permission.
+        with self.lock:
+            self.session_enabled = False
+            self.epoch += 1
+            self.action = None
+            self.setup_lockout = True
+        self.recovery_needed = True
+        self.follow.reset()
+        self.calibration_target = None
+        self.calibration_follow = False
+        self.stall_since = self.last_progress = None
+
+    def temperature_fields(self):
+        return dict(temperature=self.temperature.status(),
+                    serial_diagnostics=self.diagnostics.snapshot(),
+                    last_temperature_event=self.last_temperature_event,
+                    last_fault_reason=self.last_fault_reason)
+
+    def blocked_status(self):
+        self.last_fault_reason = self.temperature.reason
+        fb = self.feedback
+        with self.lock:
+            self.output = dict(connection='Connected' if self.driver else 'Fault',
+                connected=bool(self.driver), status='Fault', reason=self.temperature.reason,
+                motor_fault=self.temperature.reason, feedback_valid=False,
+                session_enabled=False, authorized=False, setup_authorized=False,
+                following=False, profile_enabled=self.config.enabled,
+                identity=self.driver.identity if self.driver else {},
+                feedback=asdict(fb) if fb else {}, **self.temperature_fields())
+
+    def check_temperature(self, fb):
+        if fb.motor_status:
+            self.inhibit()
+            self.diagnostics.event('motor_fault', feedback=asdict(fb))
+            raise IOError(f'Motor fault status=0x{fb.motor_status:02x}; temperature={fb.temperature_c} C')
+        before = self.temperature.state
+        self.temperature.sample(fb.temperature_c, fb.received_at, time.monotonic())
+        if before == 'NORMAL' and self.temperature.state == 'TEMPERATURE_UNVERIFIED':
+            self.inhibit()
+            self.diagnostics.counters['suspicious_temperatures'] += 1
+            self.last_temperature_event = dict(feedback=asdict(fb),
+                previous_verified_temperature_c=self.temperature.verified,
+                transaction=dict(self.diagnostics.last), wall_ns=time.time_ns())
+            self.diagnostics.event('suspicious_temperature', **self.last_temperature_event)
+        if self.temperature.state != 'NORMAL':
+            self.inhibit()
+            self.last_temperature_event = dict(self.last_temperature_event or {},
+                                               validation=self.temperature.status())
+            if self.temperature.state == 'SENSOR_OR_COMMUNICATION_FAULT':
+                self.disconnect()
+            self.blocked_status()
+            return False
+        return True
+
+    def verify_temperature(self):
+        try:
+            if not self.temperature.confirmations:
+                value, at = self.driver.read_temperature()
+                self.temperature.sample(value, at, time.monotonic(), independent=True)
+            else:
+                self.feedback = self.driver.read()
+                if self.feedback.motor_status:
+                    raise IOError(f'Motor fault status=0x{self.feedback.motor_status:02x}')
+                self.temperature.sample(self.feedback.temperature_c,
+                                        self.feedback.received_at, time.monotonic())
+        except Exception as exc:
+            self.temperature.fail(str(exc))
+        self.last_temperature_event = dict(self.last_temperature_event or {},
+            validation=self.temperature.status(), confirmation_transaction=dict(self.diagnostics.last))
+        self.diagnostics.event('temperature_confirmation', **self.last_temperature_event)
+        if self.temperature.state == 'TEMPERATURE_CONFIRMED_HIGH':
+            self.diagnostics.counters['confirmed_high_events'] += 1
+        if self.temperature.state in ('TEMPERATURE_CONFIRMED_HIGH', 'SENSOR_OR_COMMUNICATION_FAULT'):
+            self.disconnect()
+        self.blocked_status()
 
     def step(self):
         now = time.monotonic()
@@ -106,26 +199,42 @@ class Worker:
         session = self.session_enabled
         heartbeat = recent('heartbeat') is True
         duplicate = recent('duplicate') is True
-        calibration = setup and not duplicate
+        calibration = setup and not duplicate and not self.setup_lockout
         reason = 'Holding; authorization withdrawn'
         if action and now - action[1] < .5:
             name = action[0]
+            if name in ('connect', 'reload') and self.temperature.state == 'TEMPERATURE_UNVERIFIED':
+                self.verify_temperature()
+                return
             if name in ('connect', 'reload'):
                 # Read-only discovery is independent of the arm and external
                 # program.  No target or torque command is sent here.
                 self.disconnect()
                 self.config = load(self.path)
                 self.follow = Follow(self.config)
+                self.temperature = Temperature(self.config.temperature_limit)
                 self.driver = self.factory(self.config)
+                if hasattr(self.driver, 'diagnostics'):
+                    self.driver.diagnostics = self.diagnostics
                 self.feedback = self.driver.connect(self.quit.is_set)
+                if self.diagnostics.counters['connections']:
+                    self.diagnostics.counters['reconnects'] += 1
+                self.diagnostics.counters['connections'] += 1
                 # Discovery is read-only and does not silently save an ID.
                 self.config = replace(self.config, servo_id=self.driver.servo_id)
                 self.driver.config = self.config
                 self.follow = Follow(self.config)
                 self.stall_since = self.last_progress = None
                 self.attempted_ticks = self.attempt_at = self.write_acknowledged = None
+                self.check_temperature(self.feedback)
                 return
             if name != 'read':
+                if self.temperature.state != 'NORMAL':
+                    if self.temperature.state == 'TEMPERATURE_UNVERIFIED':
+                        self.verify_temperature()
+                    else:
+                        self.blocked_status()
+                    return
                 if not calibration or self.feedback is None:
                     raise ValueError(
                         'Authorize gripper calibration (mechanism clear, supervised) and '
@@ -147,11 +256,17 @@ class Worker:
                 self.follow.last_sent = measured
         if not self.driver:
             return
+        if self.temperature.state == 'TEMPERATURE_UNVERIFIED':
+            self.verify_temperature()
+            return
+        if self.temperature.state != 'NORMAL':
+            self.blocked_status()
+            return
         self.feedback = self.driver.read()
         fb = self.feedback
         feedback_wall_ns = time.time_ns()
-        if fb.motor_status or fb.temperature_c >= self.config.temperature_limit:
-            raise IOError(f'Motor fault status=0x{fb.motor_status:02x}; temperature={fb.temperature_c} C')
+        if not self.check_temperature(fb):
+            return
         # Bridge signs: fresh accepted pose stream, fresh optical signal and a
         # fresh Joy.  Arm enable/motion flags deliberately do not appear here.
         valid_input = (recent('pose') is True and recent('optical') is True
@@ -254,7 +369,8 @@ class Worker:
                 raw_trigger=recent('joy') if valid_input else None,
                 normalized_trigger=fraction, requested_fraction=fraction,
                 input_fresh=valid_input, following=self.follow.active,
-                identity=self.driver.identity, config=asdict(self.config))
+                identity=self.driver.identity, config=asdict(self.config),
+                **self.temperature_fields())
 
     def run(self):
         try:
@@ -263,6 +379,10 @@ class Worker:
                 try:
                     self.step()
                 except Exception as exc:
+                    self.last_fault_reason = str(exc)
+                    self.inhibit()
+                    if self.temperature.state not in ('TEMPERATURE_CONFIRMED_HIGH', 'RECOVERY_REQUIRED'):
+                        self.temperature.fail(str(exc))
                     self.disconnect()
                     with self.lock:
                         self.output = dict(connection='Fault', status='Fault', connected=False,
@@ -270,7 +390,8 @@ class Worker:
                                            session_enabled=self.session_enabled,
                                            authorized=False, profile_enabled=self.config.enabled,
                                            attempted_ticks=self.attempted_ticks, write_started_wall_ns=self.attempt_at,
-                                           write_acknowledged=self.write_acknowledged)
+                                           write_acknowledged=self.write_acknowledged,
+                                           **self.temperature_fields())
                 self.quit.wait(max(0., .04 - (time.monotonic() - started)))
         finally:
             self.disconnect()

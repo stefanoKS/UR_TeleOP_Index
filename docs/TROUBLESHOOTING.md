@@ -38,6 +38,10 @@ A one-shot echo can wait indefinitely if its topic is absent; use Ctrl+C. A high
 
 Software Disarm requests normal downstream stopping. Use the pendant/physical emergency stop for an emergency; neither a status flag nor zero Twist establishes physical standstill.
 
+## ST3215 abrupt temperature changes
+
+A single high sample is **TEMPERATURE UNVERIFIED**, immediately inhibits movement, and triggers bounded read-only confirmation. Confirmed high temperature, suspected transient readings and feedback errors are separate outcomes. Preserve the raw event and counter/timing evidence; do not assume sensor failure or genuine heating from the GUI value alone. Review [V6.2 diagnostics and read-only hardware procedure](V6_2_GRIPPER_RELIABILITY.md). Recovery requires Connect read-only, fresh normal feedback, explicit ENABLE and new trigger pickup; cool and investigate a confirmed high event first. Never raise the limit to suppress faults.
+
 ## Gripper and Dashboard program start
 
 | Symptom | Likely cause | Diagnostic command | Corrective action |

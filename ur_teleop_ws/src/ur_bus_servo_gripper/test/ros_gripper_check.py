@@ -17,10 +17,12 @@ from ur_bus_servo_gripper.st3215_driver import Feedback
 
 class FakeDriver:
     writes=[]
+    temperature=25
     def __init__(self,config):
         self.config=config;self.servo_id=7;self.identity={'servo_id':7}
     def connect(self,cancelled):return self.read()
-    def read(self):return Feedback(1650,0,0,12.,25,0,0,False,time.monotonic())
+    def read(self):return Feedback(1650,0,0,12.,self.temperature,0,0,False,time.monotonic())
+    def read_temperature(self):return 35,time.monotonic()
     def write(self,ticks,calibration=False):self.writes.append(ticks)
     def close(self):pass
 
@@ -85,8 +87,34 @@ def run():
             assert 'heartbeat' in rejected.message.lower(), rejected.message
             state['heartbeat']=True;pump(.25)
             set_enabled(True);set_enabled(False)
+            assert latest['schema_version']==2 and 'serial_diagnostics' in latest
+            assert node.count_publishers('/gripper/status')==1
+            FakeDriver.temperature=107
+            deadline=time.monotonic()+1
+            while latest.get('temperature',{}).get('state')!='TEMPERATURE_UNVERIFIED' and time.monotonic()<deadline:
+                ex.spin_once(timeout_sec=.002)
+            assert latest['temperature']['state']=='TEMPERATURE_UNVERIFIED',latest
+            count=len(FakeDriver.writes)
+            FakeDriver.temperature=36
+            pump(.2)
+            assert latest['temperature']['state']=='RECOVERY_REQUIRED',latest
+            assert not latest['session_enabled'] and not latest['authorized']
+            assert latest['last_temperature_event']['feedback']['temperature_c']==107
+            assert len(FakeDriver.writes)==count
+            set_enabled(True,expect=False)
+            connect=fixture.create_client(Trigger,'/gripper/connect')
+            assert connect.wait_for_service(timeout_sec=1.)
+            connect.call_async(Trigger.Request());pump(.2)
+            assert latest['temperature']['state']=='NORMAL'
+            state['raw']=.5;set_enabled(True);pump(.2)
+            assert len(FakeDriver.writes)==count
+            state['raw']=.6;pump(.2);state['raw']=.5;pump(.2)
+            assert latest['following'],latest
+            state['raw']=1.;pump(.12)
+            assert len(FakeDriver.writes)>count
+            set_enabled(False)
             assert not node.get_publishers_info_by_topic('/scaled_joint_trajectory_controller/joint_trajectory')
-            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP, heartbeat-gated enable; no arm publisher')
+            print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP, heartbeat-gated enable, thermal status/inhibition/reconnect/pickup; no arm publisher')
         finally:
             ex.remove_node(node);node.destroy_node();fixture.destroy_node();ex.shutdown();rclpy.shutdown()
 
