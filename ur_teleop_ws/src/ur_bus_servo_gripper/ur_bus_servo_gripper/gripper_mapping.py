@@ -58,14 +58,19 @@ class Follow:
                 self.reference = float(measured)
                 self.last_sent = measured
             return None
-        if abs(measured - self.last_sent) > 100:
+        lead = c.max_target_lead_ticks
+        # A larger reviewed lead needs proportional discrepancy headroom. The
+        # floor keeps the original 100-tick guard at the 20-tick default.
+        if abs(measured - self.last_sent) > max(100, 2 * lead):
             raise EncoderFault(
                 'Encoder moved outside commanded lead; inspect mechanism and reconnect')
         desired = target_ticks(fraction, c)
+        # Elapsed monotonic time is capped so a scheduling gap cannot release a
+        # burst of queued target travel.
         bound = c.rate_ticks_s * max(0., min(.04, dt))
         self.reference += max(-bound, min(bound, desired - self.reference))
         # Limit outstanding travel even when the motor is obstructed.
-        self.reference = max(measured - 20, min(measured + 20, self.reference))
+        self.reference = max(measured - lead, min(measured + lead, self.reference))
         target = max(c.min_ticks, min(c.max_ticks, round(self.reference)))
         if abs(target - self.last_sent) >= c.threshold_ticks or (target == desired and target != self.last_sent):
             self.last_sent = target

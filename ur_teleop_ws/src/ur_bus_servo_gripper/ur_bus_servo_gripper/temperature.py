@@ -3,11 +3,19 @@ import math
 
 
 class Temperature:
-    ANOMALY_LIMIT = 3
+    # Independently disproven spikes allowed inside the window before manual
+    # recovery. One above-limit sample still pauses movement immediately.
+    ANOMALY_LIMIT = 5
     ANOMALY_WINDOW_S = 60.
 
-    def __init__(self, limit):
+    def __init__(self, limit, anomaly_limit=None, anomaly_window_s=None):
         self.limit = limit
+        self.anomaly_limit = self.ANOMALY_LIMIT if anomaly_limit is None else int(anomaly_limit)
+        self.anomaly_window_s = (self.ANOMALY_WINDOW_S if anomaly_window_s is None
+                                 else float(anomaly_window_s))
+        if self.anomaly_limit < 1 or not math.isfinite(self.anomaly_window_s) \
+                or self.anomaly_window_s <= 0:
+            raise ValueError('Invalid temperature anomaly policy')
         self.state = 'NORMAL'
         self.verified = self.verified_at = None
         self.suspicious = None
@@ -31,7 +39,7 @@ class Temperature:
                 self.verified, self.verified_at = value, received_at
                 return
             self.anomalies = [at for at in self.anomalies
-                              if received_at - at < self.ANOMALY_WINDOW_S]
+                              if received_at - at < self.anomaly_window_s]
             self.anomalies.append(received_at)
             self.suspicious, self.started = value, received_at
             self.confirmations = []
@@ -50,10 +58,10 @@ class Temperature:
                 self.reason = f'Confirmed high temperature: {self.suspicious}, {value} C; cool, Connect read-only, then explicitly enable'
             elif len(self.confirmations) == 2:
                 self.verified, self.verified_at = value, received_at
-                if len(self.anomalies) >= self.ANOMALY_LIMIT:
+                if len(self.anomalies) >= self.anomaly_limit:
                     self.state = 'RECOVERY_REQUIRED'
                     self.reason = (f'Repeated temperature anomalies: {len(self.anomalies)} within '
-                                   f'{self.ANOMALY_WINDOW_S:.0f} s; manual recovery required')
+                                   f'{self.anomaly_window_s:.0f} s; manual recovery required')
                 else:
                     self.state = 'NORMAL'
                     self.reason = (f'Temperature verification complete: suspect {self.suspicious} C; '
@@ -67,4 +75,6 @@ class Temperature:
         return dict(state=self.state, verified_temperature_c=self.verified,
                     verified_at=self.verified_at, suspicious_temperature_c=self.suspicious,
                     confirmation_readings=list(self.confirmations),
-                    recent_anomaly_count=len(self.anomalies), reason=self.reason)
+                    recent_anomaly_count=len(self.anomalies),
+                    anomaly_limit=self.anomaly_limit,
+                    anomaly_window_s=self.anomaly_window_s, reason=self.reason)

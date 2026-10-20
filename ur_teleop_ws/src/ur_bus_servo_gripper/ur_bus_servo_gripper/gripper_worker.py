@@ -18,6 +18,10 @@ from .faults import (ConfigurationFault, FaultCategory, MechanicalFault,
                      MotorFault, category_of)
 
 
+# Calibration keeps its own low-speed caps independent of normal-motion tuning.
+CALIBRATION_RATE_TICKS_S = 25.
+CALIBRATION_LEAD_TICKS = 20
+
 
 class Worker:
     def __init__(self, path, driver_factory=Driver):
@@ -320,7 +324,8 @@ class Worker:
                 if name == 'follow':
                     self.calibration_follow = True
                     self.calibration_target = None
-                    self.follow = Follow(replace(self.config, rate_ticks_s=min(self.config.rate_ticks_s, 25.)))
+                    self.follow = Follow(replace(self.config,
+                        rate_ticks_s=min(self.config.rate_ticks_s, CALIBRATION_RATE_TICKS_S)))
                 else:
                     self.calibration_follow = False
                 measured = self.feedback.ticks
@@ -358,13 +363,15 @@ class Worker:
         self.fraction = fraction
         target = None
         if calibration and self.calibration_target is not None:
-            if abs(fb.ticks - self.follow.last_sent) > 20:
+            if abs(fb.ticks - self.follow.last_sent) > CALIBRATION_LEAD_TICKS:
                 raise MechanicalFault(
                     'Encoder moved outside calibration lead; inspect mechanism and reconnect')
             goal = self.calibration_target
-            step = min(self.config.rate_ticks_s, 25.) * max(0., min(dt, .04))
+            step = (min(self.config.rate_ticks_s, CALIBRATION_RATE_TICKS_S)
+                    * max(0., min(dt, .04)))
             self.follow.reference += max(-step, min(step, goal - self.follow.reference))
-            target = round(max(fb.ticks - 20, min(fb.ticks + 20, self.follow.reference)))
+            target = round(max(fb.ticks - CALIBRATION_LEAD_TICKS,
+                               min(fb.ticks + CALIBRATION_LEAD_TICKS, self.follow.reference)))
             if target == self.follow.last_sent:
                 target = None
             else:
@@ -397,6 +404,7 @@ class Worker:
         # Error is diagnostic, never proof of grip. Halt target advancement on lack of progress.
         desired = (self.calibration_target if calibration and self.calibration_target is not None else
                    target_ticks(fraction, self.config) if (authorized or calibration) and self.follow.active and fraction is not None else None)
+        outstanding = None if desired is None else desired - fb.ticks
         if desired is not None and abs(desired - fb.ticks) >= self.config.stall_error_ticks:
             if self.last_progress is None or abs(fb.ticks - self.last_progress) >= 2:
                 self.stall_since, self.last_progress = now, fb.ticks
@@ -405,6 +413,13 @@ class Worker:
                     'Persistent position error without progress; object/obstruction/jam unknown')
         else:
             self.stall_since = self.last_progress = None
+        stalled_seconds = now - self.stall_since if self.stall_since is not None else 0.
+        # Progress resets stall_since, so only a sustained lack of motion is
+        # reported. The bounded lead prevents outstanding travel from growing.
+        motor_not_following = (self.stall_since is not None and desired is not None and
+                               stalled_seconds >= .75 * self.config.stall_seconds)
+        if motor_not_following:
+            reason = 'Motor not following acknowledged targets; movement target bounded'
         # Recheck latest withdrawal after bounded reads and before issuing a packet.
         with self.lock:
             latest, current_epoch, live_session = dict(self.inputs), self.epoch, self.session_enabled
@@ -446,6 +461,17 @@ class Worker:
                 profile_enabled=self.config.enabled, calibration_complete=calibration_complete,
                 feedback=asdict(fb), feedback_wall_ns=feedback_wall_ns,
                 commanded_ticks=self.commanded, command_wall_ns=self.command_at,
+                last_acknowledged_ticks=(self.commanded if self.write_acknowledged else None),
+                desired_ticks=desired, measured_ticks=fb.ticks,
+                outstanding_error_ticks=outstanding,
+                target_lead_ticks=(CALIBRATION_LEAD_TICKS if physical_calibration
+                                   else self.follow.config.max_target_lead_ticks),
+                effective_rate_ticks_s=self.follow.config.rate_ticks_s,
+                sdk_speed=self.config.speed, sdk_acceleration=self.config.acceleration,
+                motor_moving=fb.moving, motor_not_following=motor_not_following,
+                stalled_seconds=stalled_seconds,
+                feedback_ms=self.diagnostics.timings.get('feedback', {}).get('last_ms'),
+                write_ms=self.diagnostics.timings.get('write', {}).get('last_ms'),
                 attempted_ticks=self.attempted_ticks, write_started_wall_ns=self.attempt_at,
                 write_acknowledged=self.write_acknowledged,
                 raw_trigger=recent('joy') if valid_input else None,

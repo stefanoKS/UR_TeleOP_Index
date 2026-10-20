@@ -17,9 +17,17 @@ class Config:
     closed_ticks: int = 0
     min_ticks: int = 0
     max_ticks: int = 0
-    speed: int = 100  # SDK raw units; firmware phase determines physical units
-    acceleration: int = 5  # SDK units, nonzero
+    # SDK fields are raw vendor units; the firmware determines physical speed.
+    # Acceleration is a one-byte field (0..255, 255 reserved), so 254 is the
+    # highest verified nonzero application value. Speed is a 16-bit field, but
+    # 1000 remains the reviewed ceiling for ST3215 firmware.
+    speed: int = 100
+    acceleration: int = 5
+    # Software target advancement per monotonic second. This bounds setpoint
+    # generation only; it is not a claim that the servo can reach this rate.
     rate_ticks_s: float = 100.0
+    # Maximum software target distance ahead of fresh measured feedback.
+    max_target_lead_ticks: int = 20
     trigger_min: float = 0.0
     trigger_max: float = 1.0
     deadzone: float = 0.02
@@ -41,6 +49,7 @@ class Config:
         ranges = {'servo_id': (-1, 253), 'open_ticks': (0, 4095), 'closed_ticks': (0, 4095),
                   'min_ticks': (0, 4095), 'max_ticks': (0, 4095), 'speed': (1, 1000),
                   'acceleration': (1, 254), 'threshold_ticks': (1, 20), 'jog_ticks': (1, 20),
+                  'max_target_lead_ticks': (5, 60),
                   'temperature_limit': (20, 70), 'stall_error_ticks': (5, 200)}
         for key, (low, high) in ranges.items():
             value = getattr(self, key)
@@ -50,8 +59,8 @@ class Config:
             value = getattr(self, key)
             if type(value) not in (float, int) or not math.isfinite(value):
                 raise ValueError(key + ' must be finite')
-        if not 1 <= self.rate_ticks_s <= 500 or not 0 <= self.deadzone < .25:
-            raise ValueError('Rate must be 1..500 ticks/s; deadzone must be 0..<0.25')
+        if not 1 <= self.rate_ticks_s <= 2000 or not 0 <= self.deadzone < .25:
+            raise ValueError('Rate must be 1..2000 ticks/s; deadzone must be 0..<0.25')
         if self.trigger_max - self.trigger_min < .01 or not .2 <= self.stall_seconds <= 5:
             raise ValueError('Invalid trigger range or stall observation interval')
         if calibrated or self.enabled:

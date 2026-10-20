@@ -110,13 +110,39 @@ def test_hundreds_normal_cycles(worker):
     assert not FakeDriver.writes
 
 
-def test_repeated_spikes_bounded_evidence(worker):
-    for index in range(3):
+@pytest.mark.parametrize('count', [1, 2, 4])
+def test_isolated_spikes_within_policy_recover(worker, count):
+    for index in range(count):
         sample(worker, 35);sample(worker, 107);confirm(worker, 35);sample(worker, 36)
-        assert worker.temperature.state == ('RECOVERY_REQUIRED' if index == 2 else 'NORMAL')
-    assert worker.diagnostics.counters['suspicious_temperatures'] == 3
+        assert worker.temperature.state == 'NORMAL'
+    assert worker.diagnostics.counters['suspicious_temperatures'] == count
+    assert worker.temperature.status()['recent_anomaly_count'] == count
+    assert worker.session_enabled
+
+
+def test_five_spikes_require_manual_recovery(worker):
+    for index in range(5):
+        sample(worker, 35);sample(worker, 107);confirm(worker, 35);sample(worker, 36)
+        assert worker.temperature.state == ('RECOVERY_REQUIRED' if index == 4 else 'NORMAL')
+    assert worker.diagnostics.counters['suspicious_temperatures'] == 5
     assert not worker.session_enabled
     assert not FakeDriver.writes
+    assert worker.update('session_enabled', True) is False
+
+
+def test_anomaly_policy_is_configurable():
+    t = Temperature(60, anomaly_limit=2, anomaly_window_s=10.)
+    for index in range(2):
+        at = float(index * 3 + 1)
+        t.sample(60, at, at)
+        t.sample(35, at + .05, at + .05, independent=True)
+        t.sample(36, at + .1, at + .1)
+    assert t.state == 'RECOVERY_REQUIRED'
+    assert t.status()['anomaly_limit'] == 2
+    with pytest.raises(ValueError):
+        Temperature(60, anomaly_limit=0)
+    with pytest.raises(ValueError):
+        Temperature(60, anomaly_window_s=0.)
 
 
 @pytest.mark.parametrize('phase', ['register', 'block', 'deadline'])

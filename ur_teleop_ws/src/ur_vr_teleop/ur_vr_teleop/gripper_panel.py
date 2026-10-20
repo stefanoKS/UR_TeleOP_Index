@@ -1,7 +1,8 @@
 """Tk-only calibration editor; ROS requests and persistence stay asynchronous."""
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from .gripper_diagnostics import fault_text, temperature_text, serial_text
+from .gripper_diagnostics import (fault_text, performance_text, serial_text,
+                                  temperature_text)
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -17,7 +18,7 @@ class GripperPanel:
         self.path = gui.config_path.parent / 'gripper.json'
         self.window = tk.Toplevel(gui.root)
         self.window.title('Gripper Setup')
-        self.window.geometry('680x700')
+        self.window.geometry('680x760')
         self.closed = False
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='gripper-config')
         self.future = None
@@ -43,25 +44,48 @@ class GripperPanel:
         self.canvas = canvas
         ttk.Label(body, text='GRIPPER CONFIGURATION', font=('', 13, 'bold')).grid(row=0, columnspan=2, sticky='w')
         ttk.Label(body, textvariable=self.telemetry, wraplength=580).grid(row=1, columnspan=2, sticky='w', pady=5)
-        labels = [('port','USB port (manual fallback allowed)'), ('servo_id','Servo ID (-1 discovers all IDs)'),
-            ('open_ticks','OPEN encoder ticks'), ('closed_ticks','CLOSED encoder ticks'),
-            ('min_ticks','Reviewed minimum ticks'), ('max_ticks','Reviewed maximum ticks'),
-            ('speed','Maximum speed (SDK raw)'), ('acceleration','Acceleration (SDK raw)'),
-            ('rate_ticks_s','Software target rate (ticks/s)'), ('jog_ticks','Jog increment (ticks)'),
-            ('trigger_min','Trigger minimum'), ('trigger_max','Trigger maximum'),
-            ('deadzone','Trigger deadzone (fraction)'), ('threshold_ticks','Change threshold (ticks)'),
-            ('temperature_limit','Temperature fault threshold (°C)'),
-            ('stall_error_ticks','Persistent error threshold (ticks)'), ('stall_seconds','No-progress timeout (s)')]
-        for row, (key, label) in enumerate(labels, 2):
-            ttk.Label(body, text=label).grid(row=row, column=0, sticky='w')
-            variable = tk.StringVar()
-            self.fields[key] = variable
-            if key == 'port':
-                widget = ttk.Combobox(body, textvariable=variable, values=ports(), width=35)
-            else:
-                widget = ttk.Entry(body, textvariable=variable, width=36)
-            widget.grid(row=row, column=1, sticky='ew', pady=1)
-        row = len(labels) + 2
+        sections = [
+            ('CONNECTION & TRAVEL', [
+                ('port','USB port (manual fallback allowed)'),
+                ('servo_id','Servo ID (-1 discovers all IDs)'),
+                ('open_ticks','OPEN encoder ticks'), ('closed_ticks','CLOSED encoder ticks'),
+                ('min_ticks','Reviewed minimum ticks'), ('max_ticks','Reviewed maximum ticks'),
+                ('jog_ticks','Jog increment (ticks)')]),
+            ('TRIGGER MAPPING', [
+                ('trigger_min','Trigger minimum'), ('trigger_max','Trigger maximum'),
+                ('deadzone','Trigger deadzone (fraction)')]),
+            ('PERFORMANCE TUNING', [
+                ('speed','SDK maximum speed (raw)'),
+                ('acceleration','SDK acceleration (raw)'),
+                ('rate_ticks_s','Software target rate (ticks/s)'),
+                ('max_target_lead_ticks','Maximum command lead (ticks)'),
+                ('threshold_ticks','Change threshold (ticks)')]),
+            ('SAFETY LIMITS', [
+                ('temperature_limit','Temperature fault threshold (°C)'),
+                ('stall_error_ticks','Persistent error threshold (ticks)'),
+                ('stall_seconds','No-progress timeout (s)')])]
+        row = 2
+        for title, labels in sections:
+            ttk.Label(body, text=title, font=('', 10, 'bold')).grid(
+                row=row, columnspan=2, sticky='w', pady=(8, 2))
+            row += 1
+            for key, label in labels:
+                ttk.Label(body, text=label).grid(row=row, column=0, sticky='w')
+                variable = tk.StringVar()
+                self.fields[key] = variable
+                if key == 'port':
+                    widget = ttk.Combobox(body, textvariable=variable, values=ports(), width=35)
+                else:
+                    widget = ttk.Entry(body, textvariable=variable, width=36)
+                widget.grid(row=row, column=1, sticky='ew', pady=1)
+                row += 1
+        ttk.Label(body, text='Performance limits: software target rate caps how far the '
+            'target may advance each worker cycle; maximum command lead caps how far it may '
+            'run ahead of measured feedback; SDK speed/acceleration are applied by the servo '
+            'firmware. The lowest active limit restricts movement. Raising these values does '
+            'not guarantee that the motor can reach them.', wraplength=580,
+            justify='left').grid(row=row, columnspan=2, sticky='w', pady=4)
+        row += 1
         for label, variable in [('Enable trigger follow on future sessions', self.enabled),
                                 ('Invert trigger', self.invert),
                                 ('Authorize low-speed calibration (mechanism clear and supervised)', self.authorized)]:
@@ -149,6 +173,7 @@ class GripperPanel:
             f"Servo ID: {data.get('identity', {}).get('servo_id', '—')}  "
             f"Session enabled: {data.get('session_enabled', False) if fresh else False}\n"
             f"Current Position: {fb.get('ticks', 'unavailable')} ticks\n"
+            f"{performance_text(data, fresh)}\n"
             f"{temperature_text(data, fresh)}\n{fault_text(data)}\n{serial_text(data)}\n"
             f"Last fault/warning: {data.get('last_fault_reason', 'none')}\n"
             f"Raw trigger: {data.get('raw_trigger')} · Observed range: {data.get('observed_trigger_range')}\n{data.get('reason', '')}")

@@ -231,6 +231,9 @@ class Driver:
         c = self.config.validate(calibrated=True)
         if type(ticks) is not int or not c.min_ticks <= ticks <= c.max_ticks:
             raise MechanicalFault('Target outside reviewed travel')
+        # Normal motion uses the configured raw SDK values (speed is a 16-bit
+        # field; acceleration is one byte with 255 reserved, so 254 is the
+        # verified ceiling). Calibration deliberately keeps its own low caps.
         self.transaction("write", lambda: self.packet.WritePosEx(self.servo_id, ticks,
                 min(c.speed, 50) if calibration else c.speed, min(c.acceleration, 5) if calibration else c.acceleration))
         if not self.torque_enabled:

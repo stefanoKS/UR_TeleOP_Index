@@ -33,6 +33,46 @@ def serial_text(data):
             ('rx_timeouts', 'rx_corruption', 'invalid_responses', 'motor_errors', 'reconnects')))
 
 
+def performance_text(data, fresh=True):
+    """Explain which configured limit currently restricts target advancement."""
+    if not fresh:
+        return 'Performance: feedback unavailable / stale'
+    fmt = lambda value, unit='': ('—' if value is None else f'{value:g}{unit}' if
+                                 isinstance(value, (int, float)) else str(value))
+    desired = data.get('desired_ticks')
+    measured = data.get('measured_ticks')
+    outstanding = data.get('outstanding_error_ticks')
+    lead = data.get('target_lead_ticks')
+    rate = data.get('effective_rate_ticks_s')
+    speed = data.get('sdk_speed')
+    acceleration = data.get('sdk_acceleration')
+    acknowledged = data.get('last_acknowledged_ticks')
+    timing = []
+    if data.get('feedback_ms') is not None:
+        timing.append(f'feedback {data["feedback_ms"]:.1f} ms')
+    if data.get('write_ms') is not None:
+        timing.append(f'write {data["write_ms"]:.1f} ms')
+    if data.get('motor_not_following'):
+        limitation = ('Motor is not following acknowledged targets; outstanding error is '
+                      'bounded, not accumulated. Inspect mechanism/load.')
+    elif outstanding is not None and lead is not None and abs(outstanding) >= lead:
+        limitation = ('Command lead is the active restriction: the target is at the '
+                      'configured distance from measured feedback.')
+    elif (outstanding is not None and desired is not None and measured is not None and
+          abs(outstanding) >= 2):
+        limitation = ('Software target rate is the active restriction while the target '
+                      'advances toward the trigger endpoint.')
+    else:
+        limitation = 'No software limit is currently restricting movement.'
+    return (f"Target {fmt(desired)} · measured {fmt(measured)} · acknowledged "
+            f"{fmt(acknowledged)} ticks · outstanding {fmt(outstanding)} "
+            f"(lead limit {fmt(lead)})\n"
+            f"Software rate {fmt(rate)} ticks/s · SDK speed {fmt(speed)} · "
+            f"acceleration {fmt(acceleration)} · motor "
+            f"{'moving' if data.get('motor_moving') else 'stationary'}"
+            f"{' · ' + ' / '.join(timing) if timing else ''}\n{limitation}")
+
+
 def fault_text(data):
     category = data.get('fault_category', 'NONE')
     if category in ('NONE', 'TEMPERATURE'):
