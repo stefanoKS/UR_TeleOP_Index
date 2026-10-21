@@ -6,7 +6,7 @@
     "tracking_to_robot_rpy_deg": [
       0.0,
       0.0,
-      -45.0
+      -10.0
     ],
     "max_joint_speed_rad_s": 1.5,
     "tracking_gain_s_inv": 2.0,
