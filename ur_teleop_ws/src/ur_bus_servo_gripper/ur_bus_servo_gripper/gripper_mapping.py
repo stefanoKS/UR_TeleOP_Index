@@ -39,6 +39,10 @@ class Follow:
 
     def reset(self):
         self.initial = None
+        self.previous_sample = None
+        self.pickup_method = None
+        self.pickup_error = None
+        self.crossing = False
         self.moved = self.active = False
         self.reference = self.last_sent = None
 
@@ -60,18 +64,36 @@ class Follow:
         self.last_sent = measured
         return True
 
-    def step(self, fraction, measured, dt):
+    def step(self, fraction, measured, dt, sample=None):
         c = self.config
+        if not math.isfinite(fraction) or not 0 <= fraction <= 1:
+            self.reset()
+            raise ValueError("Invalid trigger fraction")
         if not c.min_ticks <= measured <= c.max_ticks:
             self.reset()
             raise EncoderFault(
                 'Measured encoder outside reviewed travel; inspect calibration before reconnect')
         if not self.active:
+            if sample is not None:
+                seq, at = sample
+                if (not isinstance(seq, int) or not math.isfinite(at) or
+                        (self.previous_sample is not None and
+                         (seq <= self.previous_sample[0] or at <= self.previous_sample[1]))):
+                    return None
             if self.initial is None:
                 self.initial = fraction
             self.moved |= abs(fraction - self.initial) >= .05
             expected = (measured - c.open_ticks) / (c.closed_ticks - c.open_ticks)
-            if self.moved and abs(fraction - expected) <= .03:
+            self.pickup_error = fraction - expected
+            self.crossing = False
+            if sample is not None and self.previous_sample is not None:
+                previous_seq, previous_at, previous_fraction = self.previous_sample
+                self.crossing = (seq == previous_seq + 1 and 0 < at - previous_at <= .25 and
+                                 min(previous_fraction, fraction) <= expected <= max(previous_fraction, fraction))
+            if sample is not None:
+                self.previous_sample = (seq, at, fraction)
+            if self.moved and (abs(self.pickup_error) <= .03 or self.crossing):
+                self.pickup_method = 'proximity' if abs(self.pickup_error) <= .03 else 'crossing'
                 self.active = True
                 self.reference = float(measured)
                 self.last_sent = measured

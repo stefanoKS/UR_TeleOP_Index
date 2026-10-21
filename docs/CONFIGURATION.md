@@ -283,3 +283,14 @@ Configured TCP consistency uses output-only RTDE protocol 2 on robot port 30004 
 `gripper.process_enabled` in the selected YAML defaults true and controls only optional child startup (restart required). Adjacent `gripper.json` is a separate version-1 calibration, initially absent/disabled, with explicit endpoint/travel validation and atomic saving. It does not change arm operator preferences. See the [gripper parameter table](GRIPPER.md#settings-json-version-1). The saved `enabled` value means the profile is calibrated/available; it does not reauthorize movement after a restart. Normal follow additionally requires the latched `/gripper/set_enabled` session and the gripper heartbeat. ENABLE is rejected while that heartbeat is stale; STOP always wins over a pending ENABLE and is confirmed through `session_enabled: false` and `authorized: false` status readback.
 
 The same `gripper.json` carries follow recovery settings: `follow_resume_window_s` (default 2 s, 0.5–10 s), `follow_verify_s` (default 0.15 s, 0.05–1 s), `comm_retry_count` (default 2, 0–5) and `comm_retry_window_s` (default 0.5 s, 0.1–2 s). Missing keys in older files use those defaults. They affect continuity/recovery only, never calibration endpoints or arm preferences. See [V6.3 recovery](V6_3_GRIPPER_CONTINUOUS_FOLLOW.md).
+
+### V6.4 trigger input contract
+
+No saved-setting schema, speed, acceleration or recovery-window default changes.
+`/vr/controller/gripper_input` is required; deploy/restart the updated bridge and
+gripper together. Its schema-1 coherent JSON observation replaces Joy as the
+gripper input. Event/publication/device freshness uses a fixed 250 ms bound;
+crossing pickup requires consecutive physical events at most 250 ms apart.
+The existing 5% deliberate excursion and 3% proximity thresholds remain.
+Input histories are bounded to 64 pending physical events and 32 state
+transitions. See [contract and optical limitation](V6_4_TRIGGER_RELIABILITY.md).

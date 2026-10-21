@@ -181,3 +181,17 @@ def test_fault_category_presentation_preserves_reason(category,label,reason):
 def test_temperature_fault_does_not_get_unrelated_fault_label():
     from ur_vr_teleop.gripper_diagnostics import fault_text
     assert fault_text(dict(fault_category='TEMPERATURE',last_fault_reason='confirmed high'))==''
+
+
+def test_trigger_provenance_labels_and_details():
+    from ur_vr_teleop.gripper_diagnostics import follow_state_text, trigger_text
+    data=dict(follow_state='SIGNAL_PAUSED',trigger_input=dict(state='TEMPORARILY_UNVERIFIED',
+        raw=.7,event_seq=42,event_time=100.,event_age_s=2.,observation_seq=500))
+    assert 'TRIGGER INPUT UNVERIFIED' in follow_state_text(data)
+    assert 'host source time' in trigger_text(data) and '2.000 s' in trigger_text(data)
+    data['trigger_input']['state']='DISCONNECTED_OR_STALE'
+    assert 'CONTROLLER SIGNAL LOST' in follow_state_text(data)
+    data['follow_state']='PICKUP_REQUIRED'
+    assert 'WAITING FOR INITIAL PICKUP' in follow_state_text(data)
+    data['signal_loss_duration_ms']=2100
+    assert 'PICKUP REQUIRED AFTER LONG INTERRUPTION' in follow_state_text(data)

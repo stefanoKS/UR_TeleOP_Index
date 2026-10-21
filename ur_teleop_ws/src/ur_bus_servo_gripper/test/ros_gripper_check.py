@@ -1,6 +1,8 @@
 """Isolated ROS lifecycle integration with fake serial, never a hardware driver."""
 import json
 import tempfile
+import subprocess
+import os
 import time
 from pathlib import Path
 import rclpy
@@ -29,18 +31,19 @@ class FakeDriver:
 
 def run():
     rclpy.init(domain_id=147)
+    bridge = subprocess.Popen([str(Path(__file__).resolve().parents[3] / 'build/ur_vr_bridge/trigger_input_fixture')],
+                              env=dict(os.environ, ROS_DOMAIN_ID='147', ROS_LOCALHOST_ONLY='1'))
     with tempfile.TemporaryDirectory() as directory:
         path=Path(directory)/'g.json'
         save(path,Config(enabled=True,servo_id=7,open_ticks=1000,closed_ticks=2300,min_ticks=990,max_ticks=2310,deadzone=0.))
         fixture=rclpy.create_node('gripper_fixture')
         node=GripperNode(lambda unused:Worker(path,FakeDriver))
         ex=MetadataExecutor();ex.add_node(node);ex.add_node(fixture)
-        pubs={key:fixture.create_publisher(typ,topic,1) for key,typ,topic in [
-            ('joy',Joy,'/vr/controller/joy'),('pose',Bool,'/vr/controller/pose_fresh'),
-            ('optical',Bool,'/vr/controller/optical_fresh'),
-            ('heartbeat',Bool,'/gripper/operator_present')]}
+        pubs={key:fixture.create_publisher(String if key == 'events' else Bool,topic,10) for key,topic in [
+            ('events','/test/trigger_events'),('heartbeat','/gripper/operator_present')]}
+        sent = {}
         enable=fixture.create_client(SetBool,'/gripper/set_enabled')
-        state=dict(raw=.5,enabled=False,valid=True,stale=False,heartbeat=True)
+        state=dict(raw=.5,enabled=False,valid=True,stale=False,heartbeat=True,imu=True)
         latest={}
         fixture.create_subscription(String,'/gripper/status',lambda msg:latest.update(json.loads(msg.data)),1)
         def set_enabled(value,expect=True):
@@ -53,12 +56,15 @@ def run():
             assert result.success is expect, (result.message, latest)
             return result
         def publish():
-            pubs['pose'].publish(Bool(data=state['valid']));pubs['optical'].publish(Bool(data=state['valid']))
             pubs['heartbeat'].publish(Bool(data=state['heartbeat']))
-            msg=Joy();msg.header.stamp=fixture.get_clock().now().to_msg()
-            if state['stale']:msg.header.stamp.sec-=1
-            msg.axes=[0.,state['raw'] if state['valid'] else 0.];msg.buttons=[0]*16
-            pubs['joy'].publish(msg)
+            # Emit only physical changes. Held input is classified by the same
+            # C++ cache and liveness guard used in controller_bridge, not fake Joy.
+            if fixture.count_subscribers('/test/trigger_events'):
+                for command, value in (('axis',state['raw']),('pose',int(state['valid'])),
+                                       ('stale',int(state['stale'])),('imu',int(state['imu']))):
+                    if sent.get(command) != value:
+                        pubs['events'].publish(String(data=f'{command} {value}'))
+                        sent[command] = value
         fixture.create_timer(.01,publish)
         def pump(seconds):
             until=time.monotonic()+seconds
@@ -67,7 +73,8 @@ def run():
             pump(.6)
             assert latest.get('connected'),latest
             assert not FakeDriver.writes
-            set_enabled(True);state['enabled']=True;pump(.3);state['raw']=.6;pump(.2);state['raw']=.5;pump(.2)
+            set_enabled(True);state['enabled']=True;pump(.2);state['raw']=.35;pump(.12);state['raw']=.55;pump(.12)
+            assert latest['pickup_method']=='crossing',latest
             assert latest.get('following'),latest
             state['raw']=1.;pump(.12)
             assert FakeDriver.writes and max(FakeDriver.writes)<=1670
@@ -75,12 +82,12 @@ def run():
             assert len(FakeDriver.writes)==count
             assert latest['follow_state']=='SIGNAL_PAUSED',latest
             assert latest['resume_pending'] is True
-            state.update(valid=True,raw=0.);pump(.35)
+            state.update(valid=True);pump(.35)
             # Short verified interruption resumes without a new pickup.
             assert latest['follow_state']=='FOLLOWING',latest
             assert latest['recovery_count']>=1
             assert len(FakeDriver.writes)>count
-            assert FakeDriver.writes[count]==1646  # fresh baseline, 4 ticks/cycle
+            assert FakeDriver.writes[count]==1654  # held trigger stays closed, fresh baseline
             state['raw']=.5;pump(.2);state['raw']=1.;pump(.1)
             assert latest.get('following')
             state['stale']=True;pump(.15);count=len(FakeDriver.writes);pump(.15)
@@ -114,10 +121,26 @@ def run():
             assert latest['following'],latest
             state['raw']=1.;pump(.12)
             assert len(FakeDriver.writes)>count
+            state['imu']=False;pump(.4)
+            count=len(FakeDriver.writes)
+            state['imu']=True;pump(.3)
+            assert len(FakeDriver.writes)==count
+            assert latest['trigger_input']['state']=='TEMPORARILY_UNVERIFIED',latest
+            state['raw']=.7;pump(.35)
+            assert latest['follow_state']=='FOLLOWING',latest
+            state['valid']=False;pump(2.1)
+            count=len(FakeDriver.writes)
+            state['valid']=True;pump(.3)
+            assert len(FakeDriver.writes)==count and not latest['following'],latest
+            state['raw']=.35;pump(.1);state['raw']=.55;pump(.1)
+            assert latest['pickup_method']=='crossing' and latest['following'],latest
             set_enabled(False)
+            count=len(FakeDriver.writes);state['raw']=0.;pump(.3)
+            assert len(FakeDriver.writes)==count
             assert not node.get_publishers_info_by_topic('/scaled_joint_trajectory_controller/joint_trajectory')
             print('ROS gripper lifecycle passed: independent enable, pickup, loss, recovery, stale stamps, STOP, heartbeat-gated enable, thermal pause/session retention/pickup; no arm publisher')
         finally:
+            bridge.terminate();bridge.wait(timeout=5)
             ex.remove_node(node);node.destroy_node();fixture.destroy_node();ex.shutdown();rclpy.shutdown()
 
 

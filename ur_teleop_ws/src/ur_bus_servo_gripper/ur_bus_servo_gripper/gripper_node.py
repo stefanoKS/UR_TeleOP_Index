@@ -1,7 +1,7 @@
 """Read-only independent gripper supervision, services and diagnostics.
 
 The gripper owns its own session enable and operator heartbeat.  It consumes
-only the VR bridge's Joy/pose/optical signals; no arm enable, motion-ready,
+only the VR bridge's coherent gripper input observations; no arm enable, motion-ready,
 External Control or Servo state is required for normal trigger follow.
 """
 import json
@@ -12,11 +12,12 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor, await_or_execute
-from sensor_msgs.msg import Joy, JointState
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String, Float64, Int32
 from std_srvs.srv import Trigger, SetBool
 from .gripper_config import load
 from .gripper_worker import Worker
+from .trigger_input import TriggerInput
 
 
 class MetadataExecutor(SingleThreadedExecutor):
@@ -45,10 +46,7 @@ class GripperNode(Node):
         default = str(Path.home() / 'Documents/Teleop/ur_teleop/config/gripper.json')
         self.declare_parameter('config_file', default)
         self.worker = worker_factory(self.get_parameter('config_file').value)
-        self.pending_joy = None
-        self.last_joy_stamp = 0
-        self.flag_times = {'pose': -float('inf'), 'optical': -float('inf')}
-        self.flags = {'pose': False, 'optical': False}
+        self.trigger_input = TriggerInput()
         self.auto_connect = True
         self.heartbeat_at = -float('inf')
         self.trigger_min = self.trigger_max = None
@@ -57,9 +55,7 @@ class GripperNode(Node):
         self.joint_pub = self.create_publisher(JointState, '/gripper/joint_states', 1)
         self.fraction_pub = self.create_publisher(Float64, '/gripper/target_fraction', 1)
         self.target_pub = self.create_publisher(Int32, '/gripper/target_ticks', 1)
-        self.subscribe(Joy, '/vr/controller/joy', self.joy, 1)
-        self.subscribe(Bool, '/vr/controller/pose_fresh', self.pose, 1)
-        self.subscribe(Bool, '/vr/controller/optical_fresh', self.optical, 1)
+        self.subscribe(String, '/vr/controller/gripper_input', self.input_observation, 1)
         self.subscribe(Bool, '/gripper/operator_present', self.heartbeat, 1)
         self.subscribe(Bool, '/gripper/calibration_present', self.calibration, 1)
         for action in ('connect', 'read', 'reload', 'jog_open', 'jog_close', 'open', 'close', 'follow'):
@@ -77,45 +73,14 @@ class GripperNode(Node):
         stamp = info['source_timestamp'] if isinstance(info, dict) else info.source_timestamp
         return stamp > 0 and 0 <= self.get_clock().now().nanoseconds - stamp < 250_000_000
 
-    def joy(self, msg, info):
-        stamp = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
-        age = self.get_clock().now().nanoseconds - stamp
-        # The bridge publishes a zero-filled Joy during loss. Never present
-        # that synthetic sample as operator input: require both tracking flags
-        # to be healthy for the current stream and in the same publication order.
-        valid = (self.source_fresh(info) and 0 <= age < 250_000_000 and stamp > self.last_joy_stamp
-                 and len(msg.axes) > 1 and math.isfinite(msg.axes[1])
-                 and all(self.flags.values()))
-        self.last_joy_stamp = max(stamp, self.last_joy_stamp)
-        if valid:
-            self.pending_joy = (float(msg.axes[1]), time.monotonic())
-        else:
-            self.pending_joy = None
-            self.worker.update('joy', None)
-
-    def flag(self, name, msg, info):
-        now = time.monotonic()
-        value = msg.data and self.source_fresh(info)
-        self.flags[name], self.flag_times[name] = value, now
-        self.worker.update(name, value)
-        if not value:
-            self.pending_joy = None
-            self.worker.update('joy', None)
-        elif self.pending_joy is not None:
-            raw, at = self.pending_joy
-            # Corroborate a Joy with both subsequent healthy flags, rather than
-            # interpreting the bridge's synthetic zero during a loss transition.
-            if all(self.flags.values()) and all(t > at for t in self.flag_times.values()) and now - at < .1:
-                self.trigger_min = raw if self.trigger_min is None else min(self.trigger_min, raw)
-                self.trigger_max = raw if self.trigger_max is None else max(self.trigger_max, raw)
-                self.worker.update('joy', raw)
-                self.pending_joy = None
-
-    def pose(self, msg, info):
-        self.flag('pose', msg, info)
-
-    def optical(self, msg, info):
-        self.flag('optical', msg, info)
+    def input_observation(self, msg, info):
+        observation = self.trigger_input.parse(
+            msg.data, self.get_clock().now().nanoseconds, self.source_fresh(info))
+        self.worker.observe_trigger(observation)
+        if observation.get('new_event'):
+            raw = observation['raw']
+            self.trigger_min = raw if self.trigger_min is None else min(self.trigger_min, raw)
+            self.trigger_max = raw if self.trigger_max is None else max(self.trigger_max, raw)
 
     def heartbeat(self, msg, info):
         if not msg.data:
@@ -180,11 +145,11 @@ class GripperNode(Node):
             self.worker.request('connect')
         # Ambiguous graph ownership cannot authorize a gripper.  The arm
         # backend is deliberately not part of this list.
-        for topic, key in (('/vr/controller/joy', 'joy'),
-                           ('/gripper/operator_present', 'heartbeat'),
-                           ('/gripper/calibration_present', 'calibration'),
-                           ('/vr/controller/pose_fresh', 'pose'),
-                           ('/vr/controller/optical_fresh', 'optical')):
+        if self.count_publishers('/vr/controller/gripper_input') != 1:
+            self.worker.observe_trigger(dict(valid=False, state='DISCONNECTED_OR_STALE',
+                                             rejection='Missing or duplicate input publisher'))
+        for topic, key in (('/gripper/operator_present', 'heartbeat'),
+                           ('/gripper/calibration_present', 'calibration')):
             if self.count_publishers(topic) != 1:
                 self.worker.update(key, None)
         # Two status publishers imply two gripper nodes competing for one servo.

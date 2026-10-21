@@ -22,7 +22,7 @@ The pre-existing modifications to `ur_teleop/config/operator_settings.json` were
 2. **Detection:** by-id preference, manual `/dev/...` selector, read-only ID discovery 0–253 or configured-ID ping, mode/resolution/angle-limit checks. No ID, EEPROM or mode rewrites.
 3. **Calibration GUI:** actual feedback capture, both endpoint directions, reviewed bounds, speed/acceleration/rate limits, small deliberate jogs, explicit Open/Close tests, disarmed trigger test, save/restore. Serial I/O and file operations do not run on Tk.
 4. **Persistence:** version-1 adjacent `gripper.json`, atomic replacement, previous file retained if saving fails; disabled incomplete drafts allowed, motion requires valid endpoints/ID/travel. Saved calibration is reusable.
-5. **Trigger:** calibrated min/max/inversion, endpoint deadzones, change threshold, post-Joy pose/optical corroboration, timestamp/order checks and deliberate pickup. A press/release leaves gripper follow engaged.
+5. **Trigger:** calibrated min/max/inversion, endpoint deadzones, change threshold, coherent physical-event provenance with pose/optical gating, timestamp/order checks and deliberate proximity/crossing pickup. A press/release leaves gripper follow engaged.
 6. **Commands:** separate at-most-25 Hz worker, latest-only input and bounded action mailbox, configurable software ticks/s limit (1–2000), configurable target lead (default 20, maximum 60 ticks), lower calibration limits. Targets are planned, rate/lead bounded, and committed to acknowledged state only after a successful write. Unexpected encoder displacement faults instead of creating a large setpoint jump; a motor that does not progress is reported and faults rather than accumulating outstanding travel. SDK physical speed/acceleration behavior is unverified.
 7. **Faults and continuity:** explicit `DISABLED`/`PICKUP_REQUIRED`/`FOLLOWING`/`SIGNAL_PAUSED`/`RECOVERY_VERIFYING`/`FAULT` states. A short verified VR/serial interruption holds without writing and resumes automatically from fresh feedback within the configured window; longer loss requires pickup. Isolated feedback reads retry read-only with two consecutive confirmations; write ambiguity, motor/temperature, encoder and stall faults stay latched. STOP retires follow/calibration consent without disabling holding torque. Unacknowledged attempts are distinguishable from acknowledged commands and are never replayed.
 8. **ROS:** `/gripper/target_fraction`, `/gripper/target_ticks`, `/gripper/joint_states`, `/gripper/status`; timestamps, units, validity and service semantics are documented in the [observation contract](GRIPPER.md#ros-observation-contract). No LeRobot exporter.
@@ -55,3 +55,17 @@ During development, checks found and resolved a GUI fixture compatibility issue 
 The adapter `/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B7B058089-if00` was visible. A separately scoped **read-only** discovery attempt failed before opening it with Linux `Permission denied`. No servo packet/motion was issued by that attempt; the actual ID, firmware mode, power supply, trigger range and mechanism endpoints remain unverified.
 
 Follow the [supervised sequence](GRIPPER.md#supervised-physical-validation-still-required) after administrator-approved serial access. It covers a tiny slow jog, opening direction, safe endpoints, intermediate travel, trigger pickup/range, physical speed/force/current behavior, tracking/USB/STOP recovery, holding under load, and combined UR/gripper operation. No full-range sweep, hard-stop search, EEPROM change or physical grasp test was performed automatically.
+
+## V6.4 implementation
+
+`trigger_guard.hpp` owns a historical physical axis cache and device continuity;
+`controller_bridge.cpp` publishes it without changing arm Joy. `trigger_input.py`
+validates the coherent contract; `gripper_node.py` delivers it atomically to the
+worker. `gripper_mapping.py` adds validated crossing pickup, while the worker
+requires advancing observations for recovery and records bounded state history.
+The driver rechecks permission before a torque-enable packet. Focused setup
+wording lives in `gripper_diagnostics.py`/`gripper_panel.py`.
+The earlier validation table above records its historical Joy-based test; the
+current ROS check feeds fake libsurvive-shaped events through the production
+C++ trigger guard, actual ROS callbacks and a fake motor. See
+[V6.4 evidence](V6_4_TRIGGER_RELIABILITY.md).

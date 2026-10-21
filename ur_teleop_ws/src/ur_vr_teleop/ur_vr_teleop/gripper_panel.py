@@ -2,7 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from .gripper_diagnostics import (fault_text, follow_state_text, performance_text,
-                                  serial_text, temperature_text)
+                                  serial_text, temperature_text, trigger_text)
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -180,6 +180,7 @@ class GripperPanel:
             f"Current Position: {fb.get('ticks', 'unavailable')} ticks\n"
             f"Follow: {follow_state_text(data) if fresh else 'unavailable'}\n"
             f"{performance_text(data, fresh)}\n"
+            f"{trigger_text(data)}\n"
             f"{temperature_text(data, fresh)}\n{fault_text(data)}\n{serial_text(data)}\n"
             f"Last fault/warning: {data.get('last_fault_reason', 'none')}\n"
             f"Raw trigger: {data.get('raw_trigger')} · Observed range: {data.get('observed_trigger_range')}\n{data.get('reason', '')}")

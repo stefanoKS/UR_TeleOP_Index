@@ -42,7 +42,7 @@ flowchart LR
     Index -->|A button| Survive
     Index -->|analog trigger| Survive
     Survive -->|shared pose / Joy / optical signals| A1
-    Survive -->|shared Joy / pose_fresh / optical_fresh| G1
+    Survive -->|coherent gripper input observation| G1
     A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7
     G1 --> G2 --> G3 --> G4 --> G5 --> G6
     GUI --> Start --> Prog --> Dash --> URP
@@ -143,6 +143,7 @@ Rates are configured timer/output targets, not measured timing guarantees. Names
 |---|---|---|
 | `/vr/controller/pose` | `geometry_msgs/PoseStamped` | Bridge → teleop; new accepted samples, up to 100 Hz |
 | `/vr/controller/joy` | `sensor_msgs/Joy` | Bridge → teleop/GUI; 100 Hz, A at buttons[4] |
+| `/vr/controller/gripper_input` | `std_msgs/String` | Bridge → gripper; reliable depth 1, 100 Hz; JSON schema 1 pairs physical trigger/event identity, source age, device activity and tracking gates |
 | `/vr/controller/pose_fresh` | `std_msgs/Bool` | Bridge freshness diagnostic; 100 Hz |
 | `/vr/controller/optical_fresh` | `std_msgs/Bool` | Bridge → commissioning; 100 Hz |
 | `/vr/controller/optical_status` | `std_msgs/String` | Per-station paired-sensor diagnostic → commissioning; 100 Hz |
@@ -238,9 +239,9 @@ The configuration worker checks pendant/profile agreement off the command execut
 
 ## Independent gripper
 
-The managed desktop also owns the optional `ur_bus_servo_gripper` process. Its 25 Hz serial worker reads motor feedback and writes bounded ST3215 targets independently of the UR chain. It observes the VR bridge's Joy/pose/optical topics and a gripper-owned operator heartbeat. It does **not** require arm enable intent, motion readiness, A, Servo, the native controller or External Control. `/gripper/set_enabled` latches an independent session permission; the serial worker rechecks it immediately before every packet. Connect, read and save are read-only and available with the robot disconnected. See [Gripper](GRIPPER.md).
+The managed desktop also owns the optional `ur_bus_servo_gripper` process. Its 25 Hz serial worker reads motor feedback and writes bounded ST3215 targets independently of the UR chain. It consumes the VR bridge's coherent `/vr/controller/gripper_input` observation (including pose/optical gates) and a gripper-owned operator heartbeat. It does **not** require arm enable intent, motion readiness, A, Servo, the native controller or External Control. `/gripper/set_enabled` latches an independent session permission; the serial worker rechecks it immediately before every packet. Connect, read and save are read-only and available with the robot disconnected. See [Gripper](GRIPPER.md).
 
-Follow continuity is an explicit worker state machine (`DISABLED`, `PICKUP_REQUIRED`, `FOLLOWING`, `SIGNAL_PAUSED`, `RECOVERY_VERIFYING`, `FAULT`) separate from the authorization epoch. A brief invalid/stale Joy, pose, optical or operator-heartbeat gap stops new targets while preserving the acknowledged hold target and the active pickup state. When every required observation is continuously fresh for the configured verification interval, and the interruption was within the resume window, the worker rebases on fresh motor feedback and resumes without another trigger excursion. Longer loss, explicit STOP, a new authorization generation or an unhealthy motor falls back to pickup or a latched fault. Isolated feedback read errors are retried read-only for a bounded count/time and require two consecutive fresh blocks; writes are never retried. See [V6.3 recovery](V6_3_GRIPPER_CONTINUOUS_FOLLOW.md).
+Follow continuity is an explicit worker state machine (`DISABLED`, `PICKUP_REQUIRED`, `FOLLOWING`, `SIGNAL_PAUSED`, `RECOVERY_VERIFYING`, `FAULT`) separate from the authorization epoch. A brief invalid/stale trigger, pose, optical or operator-heartbeat gap stops new targets while preserving the acknowledged hold target and the active pickup state. When every required observation is continuously fresh for the configured verification interval, and the interruption was within the resume window, the worker rebases on fresh motor feedback and resumes without another trigger excursion. Longer loss, explicit STOP, a new authorization generation or an unhealthy motor falls back to pickup or a latched fault. Isolated feedback read errors are retried read-only for a bounded count/time and require two consecutive fresh blocks; writes are never retried. See [V6.3 recovery](V6_3_GRIPPER_CONTINUOUS_FOLLOW.md).
 
 An arm/driver failure stops only the UR arm groups; the shared tracking bridge and gripper are retained, so independent trigger follow can continue with fresh tracking. An explicit tracking failure also stops tracking and leaves the gripper available for read-only diagnostics. The gripper keeps its serial ownership in either case. A full Stop ROS, Restart ROS or application close terminates all owned groups. `ProcessManager.start()` never duplicates a retained child: it performs one full owned-stack stop/start. See [Gripper](GRIPPER.md).
 
@@ -251,3 +252,5 @@ When configured, the GUI owns a pure `ProgramStartup` state machine and calls `/
 After READY, the GUI continues a bounded monitor: `program_running` every second and `get_loaded_program` every three seconds. READY is displayed only while the latest verification is at most 2.5 s old. A stopped program, changed identity, failed query or timeout becomes `PROGRAM STOPPED`/`PROGRAM UNVERIFIED` and withdraws arm intent. The GUI never shows a stale cached state as verified RUNNING.
 
 The process manager owns shutdown ordering. Before signaling the UR driver on Stop ROS/restart/close it calls the Dashboard stop service while that service is alive, then requires `program_running` readback. Failure or timeout is reported and the existing bounded process termination proceeds; it never reports an unconfirmed program stop as successful. Close and Restart also wait for fresh disarmed arm readback before initiating Dashboard shutdown.
+
+V6.4 preserves arm-facing Joy behavior. The gripper never consumes synthetic Joy zeros; it validates the separate observation and its loss generation, uses genuine events for crossing pickup, and advancing device observations for recovery. See [the contract and limitations](V6_4_TRIGGER_RELIABILITY.md).

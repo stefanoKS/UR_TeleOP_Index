@@ -6,6 +6,7 @@ gripper operator heartbeat and the bridge's fresh Joy/pose/optical signals.  The
 arm backend's enable/motion-ready/motion-output flags are never consulted.
 """
 from dataclasses import asdict, replace
+from collections import deque
 import threading
 import time
 from .gripper_config import Config, load
@@ -34,9 +35,17 @@ FOLLOW_FAULT = 'FAULT'
 class Worker:
     def __init__(self, path, driver_factory=Driver):
         self.path, self.factory = path, driver_factory
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.quit = threading.Event()
         self.inputs = {}
+        self.trigger_observation = None
+        self.trigger_events = deque(maxlen=64)
+        self.signal_revision = 0
+        self.signal_loss_count = 0
+        self.follow_history = deque(maxlen=32)
+        self.state_started = time.monotonic()
+        self.state_durations = {}
+        self.reported_state = 'DISABLED'
         # Session enable is latched until STOP GRIPPER; it is not a heartbeat.
         self.session_enabled = False
         self.action = None
@@ -92,6 +101,7 @@ class Worker:
                 if value != self.session_enabled:
                     self.session_enabled = value
                     self.epoch += 1
+                    self.trigger_events.clear()
                     if value:
                         # A new explicit ENABLE retires every prior STOP.
                         self.heartbeat_stop = False
@@ -110,16 +120,81 @@ class Worker:
             elif key == 'duplicate':
                 if bool(value) and not bool(old):
                     self.epoch += 1
-            elif key in ('pose', 'optical', 'joy') and value in (False, None) \
-                    and old not in (False, None):
+            elif ((key in ('pose', 'optical') and value is not True and old is True) or
+                  (key == 'joy' and value is None and old is not None)):
                 # Latch the interruption even if a true value arrives before the
                 # next worker cycle. Ordinary refresh never changes the epoch.
                 self._record_loss(f'{key} invalid or stale', now)
             self.inputs[key] = (value, now)
 
+    def observe_trigger(self, observation):
+        """Atomic value/validity/provenance delivery; production has no Joy fallback."""
+        now = time.monotonic()
+        with self.lock:
+            self.trigger_observation = dict(observation)
+            if observation.get('identity_changed'):
+                self.epoch += 1
+                self.trigger_events.clear()
+            if observation.get('continuity_changed'):
+                self._record_loss('Bridge reported intervening input loss', now)
+                self.trigger_events.clear()
+            if not observation.get('valid'):
+                self._record_loss(observation.get('rejection') or observation.get('state', 'input unverified'), now)
+                self.trigger_events.clear()
+                for key in ('joy', 'pose', 'optical'):
+                    self.inputs[key] = (None, now)
+                return
+            if observation.get('advancing'):
+                for key, value in (('joy', observation['raw']), ('pose', True), ('optical', True)):
+                    self.inputs[key] = (value, now)
+                self.inputs['observation'] = (observation['observation_seq'], now)
+            if observation.get('new_event'):
+                if len(self.trigger_events) == self.trigger_events.maxlen:
+                    self._record_loss('Trigger event buffer overflow; pickup continuity invalid', now)
+                    self.trigger_events.clear()
+                self.trigger_events.append((dict(observation), now))
+
+    def write_permitted(self, epoch, calibration, physical):
+        # Rechecked before each SDK packet, including torque enable after a
+        # position acknowledgement. A packet already in flight cannot be recalled.
+        with self.lock:
+            now = time.monotonic()
+            def live(key):
+                value, at = self.inputs.get(key, (None, -float('inf')))
+                return value if 0 <= now-at < .25 else None
+            if self.quit.is_set() or epoch != self.epoch:
+                return False
+            if calibration:
+                if live('calibration') is not True:
+                    return False
+            elif not self.session_enabled or self.heartbeat_stop or live('heartbeat') is not True:
+                return False
+            if live('duplicate') is True:
+                return False
+            return physical or (self.signal_lost_at is None and live('pose') is True and
+                                live('optical') is True and live('joy') is not None)
+
+    def follow_step(self, fraction, measured, dt, events):
+        if self.trigger_observation is None:
+            # Pure legacy worker fixtures; the ROS adapter only uses observe_trigger.
+            return self.follow.step(fraction, measured, dt)
+        if self.follow.active:
+            return self.follow.step(fraction, measured, dt)
+        for event, received in events:
+            if not 0 <= time.monotonic() - received + event['event_age_s'] < .25:
+                self.follow.reset()
+                continue
+            self.follow.step(normalize(event['raw'], self.config), measured, 0.,
+                             (event['event_seq'], event['sample_at']))
+            if self.follow.active:
+                break
+        return None  # Pickup never commands the motor, including its completion cycle.
+
     def _record_loss(self, reason, now):
-        # Called under self.lock.
+        # Called under self.lock. Revision protects recovery against read-time invalidation.
+        self.signal_revision += 1
         if self.signal_lost_at is None:
+            self.signal_loss_count += 1
             self.signal_lost_at = now
             self.last_signal_loss_reason = reason
         self.loss_episode_active = True
@@ -163,17 +238,18 @@ class Worker:
         self.signal_healthy_since = None
 
     def _clear_interruption(self, now, resumed=False):
-        if self.signal_lost_at is not None:
-            self.signal_loss_duration_ms = int(round((now - self.signal_lost_at) * 1000.))
-        self.signal_lost_at = None
-        self.loss_episode_active = False
-        self.signal_healthy_since = None
-        self.resume_pending = False
-        if resumed:
-            self.recovery_count += 1
-            self.recovery_reason = ''
-        else:
-            self.recovery_reason = 'Signal recovered; fresh trigger pickup required'
+        with self.lock:
+            if self.signal_lost_at is not None:
+                self.signal_loss_duration_ms = int(round((now - self.signal_lost_at) * 1000.))
+            self.signal_lost_at = None
+            self.loss_episode_active = False
+            self.signal_healthy_since = None
+            self.resume_pending = False
+            if resumed:
+                self.recovery_count += 1
+                self.recovery_reason = ''
+            else:
+                self.recovery_reason = 'Signal recovered; fresh trigger pickup required'
 
     def inhibit(self):
         # Retire all intent before any confirmation read. STOP/update can run
@@ -221,7 +297,24 @@ class Worker:
                     fault_category=self.fault_category.value)
 
     def recovery_fields(self):
+        now = time.monotonic()
+        if self.follow_state != self.reported_state:
+            duration = now - self.state_started
+            self.state_durations[self.reported_state] = self.state_durations.get(self.reported_state, 0.) + duration
+            self.follow_history.append(dict(at=now, state=self.follow_state,
+                previous=self.reported_state, duration_s=duration,
+                reason=self.recovery_reason or self.last_signal_loss_reason or self.follow_state))
+            self.reported_state, self.state_started = self.follow_state, now
         return dict(follow_state=self.follow_state,
+                    trigger_input=dict(self.trigger_observation or {}),
+                    pickup_method=self.follow.pickup_method,
+                    pickup_error=self.follow.pickup_error,
+                    pickup_crossing=self.follow.crossing,
+                    signal_loss_count=self.signal_loss_count,
+                    follow_history=list(self.follow_history),
+                    state_durations_s=dict(self.state_durations),
+                    current_state_duration_s=now-self.state_started,
+                    last_transition_reason=(self.follow_history[-1]['reason'] if self.follow_history else ''),
                     recovery_reason=self.recovery_reason,
                     recovery_count=self.recovery_count,
                     last_signal_loss_reason=self.last_signal_loss_reason,
@@ -240,27 +333,32 @@ class Worker:
                     last_communication_error=self.last_comm_error)
 
     def begin_interruption(self, reason, now):
-        # Preserve follow continuity metadata; never grant write permission.
-        if self.signal_lost_at is None:
-            self.signal_lost_at = now
-            self.last_signal_loss_reason = reason
-        self.loss_episode_active = True
-        self.signal_healthy_since = None
-        if self.follow.active:
-            self.resume_pending = True
-        self.follow_state = FOLLOW_SIGNAL_PAUSED
-        self.recovery_reason = reason
-        self.planned_target = None
+        with self.lock:
+            # Preserve acquired follow continuity; partial pickup cannot span a loss.
+            if not self.follow.active:
+                self.follow.reset()
+            if self.signal_lost_at is None:
+                self.signal_loss_count += 1
+                self.signal_lost_at = now
+                self.last_signal_loss_reason = reason
+            self.loss_episode_active = True
+            self.signal_healthy_since = None
+            if self.follow.active:
+                self.resume_pending = True
+            self.follow_state = FOLLOW_SIGNAL_PAUSED
+            self.recovery_reason = reason
+            self.planned_target = None
 
     def expire_interruption(self, now):
-        if (self.signal_lost_at is not None and
-                now - self.signal_lost_at > self.config.follow_resume_window_s):
-            self.follow.reset()
-            self.resume_pending = False
-            self.recovery_reason = ('Interruption exceeded resume window; '
-                                    'fresh trigger pickup required')
-            return True
-        return False
+        with self.lock:
+            if (self.signal_lost_at is not None and
+                    now - self.signal_lost_at > self.config.follow_resume_window_s):
+                self.follow.reset()
+                self.resume_pending = False
+                self.recovery_reason = ('Interruption exceeded resume window; '
+                                        'fresh trigger pickup required')
+                return True
+            return False
 
     def retry_feedback_read(self, exc, now):
         # One read-only attempt per worker cycle. Writes are never retried.
@@ -461,6 +559,9 @@ class Worker:
         dt, self.last_time = now - self.last_time, now
         with self.lock:
             inputs, action, epoch = dict(self.inputs), self.action, self.epoch
+            signal_revision = self.signal_revision
+            trigger_events = list(self.trigger_events)
+            self.trigger_events.clear()
             self.action = None
         if epoch != self.seen_epoch:
             # Authorization/session generation changed. Transient pose/optical
@@ -612,7 +713,7 @@ class Worker:
             self.communication_pause_status(None, now)
             return
         # Bridge signs: fresh accepted pose stream, fresh optical signal and a
-        # fresh Joy. Arm enable/motion flags deliberately do not appear here.
+        # coherent trigger observation. Arm enable/motion flags do not appear here.
         joy_value = recent('joy')
         vr_healthy = (recent('pose') is True and recent('optical') is True
                       and joy_value is not None)
@@ -652,7 +753,7 @@ class Worker:
                 self.config.validate(calibrated=True)
             except ValueError as exc:
                 raise ConfigurationFault(str(exc)) from exc
-            target = self.follow.step(fraction, fb.ticks, dt)
+            target = self.follow_step(fraction, fb.ticks, dt, trigger_events)
             self.planned_target = target
             self.follow_state = (FOLLOW_FOLLOWING if self.follow.active
                                  else FOLLOW_PICKUP_REQUIRED)
@@ -705,37 +806,46 @@ class Worker:
                 self.expire_interruption(now)
                 reason = self.recovery_reason
             elif self.signal_lost_at is not None or self.loss_episode_active:
-                # Healthy observations are available again, but movement stays
-                # inhibited until the verification interval is continuous.
-                if self.follow.active:
-                    self.resume_pending = True
-                if self.signal_healthy_since is None:
-                    self.signal_healthy_since = now
-                if now - self.signal_healthy_since < self.config.follow_verify_s:
-                    self.follow_state = FOLLOW_RECOVERY_VERIFYING
-                    self.recovery_reason = 'Recovering signal: verifying healthy input'
-                    reason = self.recovery_reason
-                else:
-                    duration = (now - self.signal_lost_at
-                                if self.signal_lost_at is not None else 0.)
-                    if (self.resume_pending and self.follow.active and
-                            duration <= self.config.follow_resume_window_s):
-                        self.follow.resume(fb.ticks)
-                        self.follow_state = FOLLOW_FOLLOWING
-                        self._clear_interruption(now, resumed=True)
-                        reason = 'Following trigger (resumed after verified recovery)'
+                with self.lock:
+                    # Healthy observations are available again, but movement stays
+                    # inhibited until the verification interval is continuous.
+                    if self.follow.active:
+                        self.resume_pending = True
+                    if self.signal_healthy_since is None:
+                        self.signal_healthy_since = now
+                    observation_at = inputs.get('observation', (None, now))[1]
+                    if (now - self.signal_healthy_since < self.config.follow_verify_s or
+                            (self.trigger_observation is not None and
+                             observation_at - self.signal_healthy_since < self.config.follow_verify_s)):
+                        self.follow_state = FOLLOW_RECOVERY_VERIFYING
+                        self.recovery_reason = 'Recovering signal: verifying healthy input'
+                        reason = self.recovery_reason
                     else:
-                        self.follow.reset()
-                        self.follow_state = FOLLOW_PICKUP_REQUIRED
-                        self._clear_interruption(now, resumed=False)
-                        reason = 'Signal recovered; fresh trigger pickup required'
+                        with self.lock:
+                            if signal_revision != self.signal_revision or epoch != self.epoch:
+                                self.follow_state = FOLLOW_RECOVERY_VERIFYING
+                                self.recovery_reason = 'Input changed during feedback read; verification restarted'
+                                return
+                            duration = (now - self.signal_lost_at
+                                        if self.signal_lost_at is not None else 0.)
+                            if (self.resume_pending and self.follow.active and
+                                    duration <= self.config.follow_resume_window_s):
+                                self.follow.resume(fb.ticks)
+                                self.follow_state = FOLLOW_FOLLOWING
+                                self._clear_interruption(now, resumed=True)
+                                reason = 'Following trigger (resumed after verified recovery)'
+                            else:
+                                self.follow.reset()
+                                self.follow_state = FOLLOW_PICKUP_REQUIRED
+                                self._clear_interruption(now, resumed=False)
+                                reason = 'Signal recovered; fresh trigger pickup required'
             else:
                 # Continuously healthy signal: normal follow or deliberate pickup.
                 try:
                     self.config.validate(calibrated=True)
                 except ValueError as exc:
                     raise ConfigurationFault(str(exc)) from exc
-                target = self.follow.step(fraction, fb.ticks, dt)
+                target = self.follow_step(fraction, fb.ticks, dt, trigger_events)
                 self.planned_target = target
                 self.recovery_reason = ''
                 if self.follow.active:
@@ -793,7 +903,14 @@ class Worker:
                 epoch == current_epoch and not self.quit.is_set()):
             self.attempted_ticks, self.attempt_at = target, time.time_ns()
             self.write_acknowledged = False
-            self.driver.write(target, calibration=calibration)
+            self.driver.write_permitted = lambda: self.write_permitted(
+                epoch, physical_calibration or self.calibration_follow, physical_calibration)
+            completed = self.driver.write(target, calibration=calibration)
+            if completed is False:
+                self.follow.reset()
+                self.recovery_reason = 'Authorization withdrawn before motor packet; fresh pickup required'
+                self.follow_state = FOLLOW_PICKUP_REQUIRED
+                return
             self.write_acknowledged = True
             # Acknowledged only after the motor accepted the bounded target.
             self.follow.commit(target)
@@ -820,6 +937,8 @@ class Worker:
                 commanded_ticks=self.commanded, command_wall_ns=self.command_at,
                 last_acknowledged_ticks=(self.commanded if self.write_acknowledged else None),
                 desired_ticks=desired, measured_ticks=fb.ticks,
+                measured_closure_fraction=((fb.ticks-self.config.open_ticks) /
+                    (self.config.closed_ticks-self.config.open_ticks) if calibration_complete else None),
                 outstanding_error_ticks=outstanding, target_error_ticks=target_error,
                 target_lead_ticks=(CALIBRATION_LEAD_TICKS if physical_calibration
                                    else self.follow.config.max_target_lead_ticks),

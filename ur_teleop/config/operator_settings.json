@@ -15,7 +15,7 @@
     "vr_translation_filter_alpha": 0.8,
     "vr_rotation_filter_alpha": 0.8,
     "joint_acceleration_warning_rad_s2": 5.0,
-    "translation_scale": 1.0,
+    "translation_scale": 1.25,
     "rotation_scale": 1.0,
     "vr_translation_deadband_m": 0.001,
     "vr_rotation_deadband_deg": 0.3,

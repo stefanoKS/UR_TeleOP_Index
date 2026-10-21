@@ -89,11 +89,22 @@ def follow_state_text(data):
     if state == 'FOLLOWING':
         return 'FOLLOWING'
     if state == 'SIGNAL_PAUSED':
+        if data.get('trigger_input', {}).get('state') == 'TEMPORARILY_UNVERIFIED':
+            return 'TRIGGER INPUT UNVERIFIED — HOLDING'
+        if data.get('trigger_input', {}).get('state') == 'DISCONNECTED_OR_STALE':
+            return 'CONTROLLER SIGNAL LOST — HOLDING'
         return ('SIGNAL LOST — HOLDING (auto-resume pending)' if data.get('resume_pending')
                 else 'SIGNAL LOST — HOLDING (pickup required after recovery)')
     if state == 'RECOVERY_VERIFYING':
         return 'RECOVERING SIGNAL — VERIFYING HEALTHY INPUT'
     if state == 'PICKUP_REQUIRED':
+        duration = data.get('signal_loss_duration_ms')
+        config = data.get('config') or {}
+        window = config.get('follow_resume_window_s', 2.) if isinstance(config, dict) else 2.
+        if isinstance(duration, (int, float)) and isinstance(window, (int, float)) and duration > window*1000:
+            return 'PICKUP REQUIRED AFTER LONG INTERRUPTION'
+        if data.get('trigger_input') and duration is None:
+            return 'WAITING FOR INITIAL PICKUP' + (f' — {reason}' if reason else '')
         return 'PICKUP REQUIRED' + (f' — {reason}' if reason else '')
     if state == 'DISABLED':
         return 'DISABLED' + (f' — {reason}' if reason else '')
@@ -117,3 +128,18 @@ def fault_text(data):
     title = titles.get(category, titles['UNKNOWN'])
     suffix = '; movement inhibited; inspect application log' if category == 'UNKNOWN' else ''
     return f'{title} — {reason}{suffix}'
+
+
+def trigger_text(data):
+    observation = data.get('trigger_input', {})
+    def fmt(value):
+        return '—' if value is None else f'{value:.3f}' if isinstance(value, float) else str(value)
+    return (f"Input: {observation.get('state', 'unavailable')} · cached {fmt(observation.get('raw'))} "
+            f"· observation {fmt(observation.get('observation_seq'))}\n"
+            f"Genuine event {fmt(observation.get('event_seq'))} · host source time "
+            f"{fmt(observation.get('event_time'))} · age {fmt(observation.get('event_age_s'))} s\n"
+            f"Pickup: {data.get('pickup_method') or 'waiting for deliberate movement / crossing'} "
+            f"· error {fmt(data.get('pickup_error'))} · measured closure {fmt(data.get('measured_closure_fraction'))}\n"
+            f"Last transition: {data.get('last_transition_reason') or '—'} "
+            f"· loss duration {fmt(data.get('signal_loss_duration_ms'))} ms "
+            f"· rejected {observation.get('rejected_samples', 0)}")

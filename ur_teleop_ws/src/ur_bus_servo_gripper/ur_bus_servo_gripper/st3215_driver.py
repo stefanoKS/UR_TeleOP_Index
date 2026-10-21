@@ -61,6 +61,7 @@ class Driver:
             except ImportError as error:
                 raise IOError(friendly_error(error)) from error
         self.config, self.sdk = config, sdk
+        self.write_permitted = lambda: True  # Worker replaces this before each command.
         self.port = self.packet = None
         self.servo_id = None
         self.identity = {}
@@ -234,12 +235,17 @@ class Driver:
         # Normal motion uses the configured raw SDK values (speed is a 16-bit
         # field; acceleration is one byte with 255 reserved, so 254 is the
         # verified ceiling). Calibration deliberately keeps its own low caps.
+        if not self.write_permitted():
+            return False
         self.transaction("write", lambda: self.packet.WritePosEx(self.servo_id, ticks,
                 min(c.speed, 50) if calibration else c.speed, min(c.acceleration, 5) if calibration else c.acceleration))
         if not self.torque_enabled:
             # Only after a deliberate bounded target, never on discovery/save.
+            if not self.write_permitted():
+                return False
             self.transaction("torque", lambda: self.packet.write1ByteTxRx(self.servo_id, 40, 1))
             self.torque_enabled = True
+        return True
 
     def close(self):
         if self.port is not None and self.port.is_open:

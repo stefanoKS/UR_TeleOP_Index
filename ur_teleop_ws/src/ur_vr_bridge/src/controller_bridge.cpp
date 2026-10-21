@@ -11,6 +11,7 @@
 #include <survive.h>
 #include "ur_vr_bridge/pose_guard.hpp"
 #include "ur_vr_bridge/optical_guard.hpp"
+#include "ur_vr_bridge/trigger_guard.hpp"
 #include <mutex>
 #include <sstream>
 
@@ -37,6 +38,8 @@ class ControllerBridge : public rclcpp::Node {
         child_.empty() || frame_ == child_ || get_parameter("use_sim_time").as_bool()) {
       throw std::runtime_error("Use wall time, distinct nonempty frames, and a positive finite pose_timeout");
     }
+    trigger_session_ = std::to_string(now().nanoseconds());
+    trigger_pub_ = create_publisher<std_msgs::msg::String>("/vr/controller/gripper_input", rclcpp::QoS(1).reliable());
     auto reliable = rclcpp::QoS(10).reliable();
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/vr/controller/pose", reliable);
     joy_pub_ = create_publisher<sensor_msgs::msg::Joy>("/vr/controller/joy", reliable);
@@ -82,6 +85,8 @@ class ControllerBridge : public rclcpp::Node {
     if (self->matches_device(so)) {
       self->last_imu_arrival_.store(steady_time());
       ++self->imu_packets_;
+      std::lock_guard<std::mutex> lock(self->trigger_mutex_);
+      self->trigger_guard_.imu(static_cast<uint32_t>(tc), steady_time());
     }
     // Observation only: preserve the complete original processing chain.
     if (self->previous_raw_imu_) self->previous_raw_imu_(so, mask, data, tc, id);
@@ -131,6 +136,7 @@ class ControllerBridge : public rclcpp::Node {
     if (requested_serial_.empty() ? name != device_name_ : serial != requested_serial_) return false;
     if (selected_) return obj == selected_;  // Do not silently switch devices after reconnection.
     selected_ = obj;
+    trigger_identity_ = name + ":" + serial;
     std_msgs::msg::String message;
     message.data = "name=" + name + " serial=" + serial +
       " subtype=" + SurviveObjectSubtypeStr(survive_simple_object_get_subtype(obj));
@@ -186,6 +192,11 @@ class ControllerBridge : public rclcpp::Node {
         const auto* button_event = survive_simple_get_button_event(&event);
         if (button_event && select(button_event->object)) {
           ++button_events_;
+          {
+            std::lock_guard<std::mutex> lock(trigger_mutex_);
+            trigger_guard_.button(*button_event, survive_simple_run_time_since_epoch(ctx_),
+                                  steady_time(), now().nanoseconds());
+          }
           const auto button = static_cast<unsigned int>(button_event->button_id);
           if (button < buttons_.size()) {
             if (button_event->event_type == SURVIVE_INPUT_EVENT_BUTTON_DOWN) buttons_[button] = 1;
@@ -204,12 +215,14 @@ class ControllerBridge : public rclcpp::Node {
     std_msgs::msg::Bool status;
     status.data = fresh;
     fresh_pub_->publish(status);
+    bool optical_fresh = false;
     {
       std::lock_guard<std::mutex> lock(optical_mutex_);
       const double t = steady_time();
       std_msgs::msg::Bool optical;
       optical.data = !shutdown && optical_guard_.fresh(t);
       optical_pub_->publish(optical);
+      optical_fresh = optical.data;
       std::ostringstream detail;
       detail << "Gen2 accepted paired sensors (250 ms):";
       for (const auto& entry : optical_guard_.counts(t)) detail << " LH" << entry.first << "=" << entry.second;
@@ -232,6 +245,14 @@ class ControllerBridge : public rclcpp::Node {
       axes_.fill(0);
     }
     joy_pub_->publish(joy);
+    std_msgs::msg::String input;
+    {
+      std::lock_guard<std::mutex> lock(trigger_mutex_);
+      input.data = trigger_guard_.message(steady_time(), now().nanoseconds(),
+          trigger_session_, trigger_identity_, fresh, optical_fresh,
+          !shutdown && count < 2048 && survive_simple_is_running(ctx_));
+    }
+    trigger_pub_->publish(input);
 
     if (fresh && new_pose_) {
       // Anchor on the latest drained sample, not the oldest startup queue event.
@@ -304,6 +325,10 @@ class ControllerBridge : public rclcpp::Node {
   std::atomic<uint64_t> imu_packets_{0}, sweep_packets_{0};
   std::atomic<double> last_imu_arrival_{0}, last_sweep_arrival_{0};
   sweep_angle_process_func previous_sweep_ = nullptr;
+  std::mutex trigger_mutex_;
+  ur_vr_bridge::TriggerGuard trigger_guard_;
+  std::string trigger_session_, trigger_identity_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr trigger_pub_;
   std::mutex optical_mutex_;
   ur_vr_bridge::OpticalGuard optical_guard_;
   std::vector<std::string> lib_args_;

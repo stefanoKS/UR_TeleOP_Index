@@ -344,3 +344,27 @@ V6.1 stabilization evidence and actual pass counts are recorded in [V6.1 report]
 V6.2 adds bounded temperature confirmation, strict serial response checks and diagnostic counters. See [V6.2 evidence and pending hardware procedure](V6_2_GRIPPER_RELIABILITY.md). Run the gripper pytest suite, independent `ros_gripper_check.py` and Tk `gui_render_check.py` after rebuilding both Python packages.
 
 V6.3 adds continuous follow across brief verified VR/serial interruptions, an explicit follow state machine, plan/commit target bookkeeping and bounded read-only feedback retries. Run `pytest ur_teleop_ws/src/ur_bus_servo_gripper/test` (including `test_follow_recovery.py`), then `ros_gripper_check.py`, `test_gripper_gui.py` and rebuild both Python packages. See [V6.3 continuous follow](V6_3_GRIPPER_CONTINUOUS_FOLLOW.md).
+
+### V6.4 trigger reliability validation
+
+Rebuild the bridge and both Python packages before testing:
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ur_teleop_ws
+PATH=/usr/bin:/bin:$PATH colcon build --base-paths src --packages-select ur_vr_bridge ur_bus_servo_gripper ur_vr_teleop --executor sequential
+source install/setup.bash
+ctest --test-dir build/ur_vr_bridge --output-on-failure
+cd ..
+/usr/bin/python3 -m pytest ur_teleop_ws/src/ur_bus_servo_gripper/test ur_teleop_ws/src/ur_vr_teleop/test ur_teleop_ws/src/ur_vr_sim_teleop/test -q
+ROS_LOCALHOST_ONLY=1 /usr/bin/python3 ur_teleop_ws/src/ur_bus_servo_gripper/test/ros_gripper_check.py
+/usr/bin/python3 ur_teleop_ws/src/ur_vr_teleop/test/gui_render_check.py
+```
+
+C++ assertions remain enabled in Release test builds. The ROS check launches
+only a hardware-free C++ input fixture and a fake motor on domain 147; do not
+run it concurrently with other domain-147 fixtures. It covers production cache
+serialization, real callback metadata, crossing pickup, unchanged held input
+through optical loss, stale publications, device loss, long-loss pickup,
+STOP, thermal pause and arm independence. GUI rendering needs a display.
+See [V6.4 results and supervised hardware procedure](V6_4_TRIGGER_RELIABILITY.md).
